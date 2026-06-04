@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.egg-info/
+dist/
+build/
+.opencode/
+*.log
+*.tmp
+$null
+simulation/data/
