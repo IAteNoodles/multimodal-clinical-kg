@@ -1,20 +1,37 @@
 from __future__ import annotations
 
+import copy
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
 import argparse
 import json
 import pickle
 import gc
 import random
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
+import psutil
 import torch
 import torch.nn as nn
 from torch import FloatTensor, LongTensor
+from torch.utils.data import TensorDataset, DataLoader
 import torch.nn.functional as F
 from torch.optim import AdamW
+
+
+class VRAMExceeded(Exception):
+    def __init__(self, vram_gb: float, shared_gb: float, batch_size: int, num_negatives: int):
+        self.vram_gb = vram_gb
+        self.shared_gb = shared_gb
+        self.batch_size = batch_size
+        self.num_negatives = num_negatives
+        super().__init__(f"Shared GPU memory {shared_gb:.2f}GB detected (total used {vram_gb:.2f}GB) with bs={batch_size} neg={num_negatives}")
 from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 
 from simulation.kg.dataset import (
@@ -50,12 +67,89 @@ except ImportError:
         print()
 
 
+def mem_trace(label, device, verbose=True):
+    """Print VRAM and RAM usage at a given point."""
+    vram_alloc = torch.cuda.memory_allocated(device) / 1e9
+    vram_reserved = torch.cuda.memory_reserved(device) / 1e9
+    vram_peak = torch.cuda.max_memory_allocated(device) / 1e9
+    ram_used = psutil.Process().memory_info().rss / 1e9
+    ram_avail = psutil.virtual_memory().available / 1e9
+    if verbose:
+        print(f"  [MEM] {label}: VRAM alloc={vram_alloc:.2f}GB reserved={vram_reserved:.2f}GB peak={vram_peak:.2f}GB | RAM used={ram_used:.1f}GB avail={ram_avail:.1f}GB")
+    return vram_alloc, vram_reserved, vram_peak, ram_used
+
+
+def _cuda_device_index(device) -> int:
+    if isinstance(device, torch.device):
+        return device.index if device.index is not None else torch.cuda.current_device()
+    if isinstance(device, int):
+        return device
+    if isinstance(device, str) and device.startswith('cuda'):
+        parts = device.split(':', 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            return int(parts[1])
+        return torch.cuda.current_device()
+    return torch.cuda.current_device()
+
+
+def _nvidia_smi_memory_gb(device) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    try:
+        gpu_idx = _cuda_device_index(device)
+        result = subprocess.run(
+            [
+                'nvidia-smi',
+                f'--id={gpu_idx}',
+                '--query-gpu=memory.total,memory.used,memory.free',
+                '--format=csv,noheader,nounits',
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        line = result.stdout.strip().splitlines()[0]
+        parts = [part.strip() for part in line.split(',')]
+        total_gb = float(parts[0]) * 1024 * 1024 / 1e9
+        used_gb = float(parts[1]) * 1024 * 1024 / 1e9
+        free_gb = float(parts[2]) * 1024 * 1024 / 1e9
+        shared_gb = max(0.0, used_gb - (total_gb - free_gb))
+        return total_gb, used_gb, shared_gb
+    except Exception:
+        return None, None, None
+
+
+class EMA:
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {n: p.data.clone() for n, p in model.named_parameters() if p.requires_grad}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module):
+        for n, p in model.named_parameters():
+            if p.requires_grad and n in self.shadow:
+                self.shadow[n].mul_(self.decay).add_(p.data, alpha=1.0 - self.decay)
+
+    def apply(self, model: nn.Module):
+        self._backup = {n: p.data.clone() for n, p in model.named_parameters() if p.requires_grad and n in self.shadow}
+        for n, p in model.named_parameters():
+            if n in self.shadow:
+                p.data.copy_(self.shadow[n])
+
+    def restore(self, model: nn.Module):
+        for n, p in model.named_parameters():
+            if n in self._backup:
+                p.data.copy_(self._backup[n])
+        self._backup = {}
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    try:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except Exception:
+        pass
 
 
 class CASCADEWrapper(nn.Module):
@@ -93,6 +187,66 @@ class MultimodalWrapper(nn.Module):
         return getattr(self.model, name)
 
 
+def _unwrap_model(model: nn.Module) -> nn.Module:
+    """Unwrap torch.compile wrapper if present."""
+    if hasattr(model, '_orig_mod'):
+        return model._orig_mod
+    return model
+
+
+def _strip_state_dict_prefix(state_dict: dict, prefix: str = '_orig_mod.') -> dict:
+    if not any(key.startswith(prefix) for key in state_dict):
+        return state_dict
+    return {
+        key[len(prefix):] if key.startswith(prefix) else key: value
+        for key, value in state_dict.items()
+    }
+
+
+def _is_incompatible_state_dict_error(exc: RuntimeError) -> bool:
+    msg = str(exc)
+    return (
+        'Missing key(s) in state_dict' in msg
+        or 'Unexpected key(s) in state_dict' in msg
+        or 'size mismatch for' in msg
+    )
+
+
+def _load_model_state_with_prefix_fallback(
+    model: nn.Module,
+    state_dict: dict,
+    checkpoint_path: Path,
+) -> bool:
+    original_state = copy.deepcopy(model.state_dict())
+    try:
+        model.load_state_dict(state_dict)
+        return True
+    except RuntimeError as exc:
+        if not _is_incompatible_state_dict_error(exc):
+            model.load_state_dict(original_state)
+            raise
+
+    model.load_state_dict(original_state)
+    try:
+        model.load_state_dict(_strip_state_dict_prefix(state_dict))
+        return True
+    except RuntimeError as exc:
+        model.load_state_dict(original_state)
+        if not _is_incompatible_state_dict_error(exc):
+            raise
+        print(
+            f"Skipping checkpoint {checkpoint_path}: incompatible with the current model/dataset ({exc}). Starting fresh."
+        )
+        return False
+
+
+def _safe_empty_cache() -> None:
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def _is_multimodal(model: nn.Module) -> bool:
     return isinstance(model, (MultimodalComplExModel, MultimodalCASCADEModel))
 
@@ -110,6 +264,12 @@ def train_model(
 ) -> Dict[str, float]:
     device = torch.device(args.device)
     model = model.to(device)
+    is_cascade = isinstance(model, CASCADEKGModel)
+    is_mm = _is_multimodal(model)
+    is_mm_cascade = _is_multimodal_cascade(model)
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
+        torch.backends.cudnn.benchmark = True
 
     high_lr_params = []
     base_params = []
@@ -129,13 +289,9 @@ def train_model(
         {'params': high_lr_params, 'lr': args.lr * args.lr_multiplier, 'weight_decay': args.weight_decay},
         {'params': loss_fn.parameters(), 'lr': args.lr, 'weight_decay': 0.0},
     ], lr=args.lr)
-    neg_sampler = NegativeSampler(dataset, num_negatives=args.num_negatives)
+    neg_sampler = NegativeSampler(dataset, num_negatives=args.num_negatives, device=device)
     device_type = 'cuda' if device.type == 'cuda' else 'cpu'
     scaler = torch.amp.GradScaler(device_type) if device_type == 'cuda' else None
-
-    is_cascade = isinstance(model, CASCADEKGModel)
-    is_mm = _is_multimodal(model)
-    is_mm_cascade = _is_multimodal_cascade(model)
 
     swa_avg = None
     swa_count = 0
@@ -144,6 +300,17 @@ def train_model(
         swa_start_epoch = max(1, int(args.epochs * args.swa_start))
 
     train_triples, train_weights = dataset.get_train_triples()
+    train_dataset = TensorDataset(train_triples)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        persistent_workers=(args.num_workers > 0),
+        prefetch_factor=2 if args.num_workers > 0 else None,
+        drop_last=True,
+    )
     val_triples, val_weights = dataset.get_val_triples()
 
     warmup_steps = getattr(args, 'warmup_steps', 0)
@@ -163,6 +330,8 @@ def train_model(
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix_parts = []
+    if args.test_kg:
+        suffix_parts.append('testkg')
     if args.ablation:
         suffix_parts.append(args.ablation)
     if active_modalities is not None:
@@ -174,40 +343,88 @@ def train_model(
     best_val_mrr = 0.0
     patience_counter = 0
     start_epoch = 1
+    global_step = 0
+    smooth_loss = None
     results: Dict[str, float] = {}
 
-    if args.resume and best_ckpt_path.exists():
-        ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
-        model.load_state_dict(ckpt['model_state_dict'])
-        if args.resume_optimizer and 'optimizer_state_dict' in ckpt:
-            optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        start_epoch = ckpt.get('epoch', 0) + 1
-        best_val_mrr = ckpt.get('metrics', {}).get('MRR', 0.0)
-        print(f"Resumed from epoch {start_epoch - 1} (val MRR={best_val_mrr:.4f})")
+    last_ckpt_path = output_dir / f"{args.model}{suffix}_last.pt"
+    resume_path = last_ckpt_path if args.resume and last_ckpt_path.exists() else (best_ckpt_path if args.resume and best_ckpt_path.exists() else None)
+    print(f"  [RESUME] resume={args.resume} last={last_ckpt_path} exists={last_ckpt_path.exists()} best={best_ckpt_path} exists={best_ckpt_path.exists()} chosen={resume_path}")
+    if resume_path is not None:
+        ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+        if _load_model_state_with_prefix_fallback(model, ckpt['model_state_dict'], resume_path):
+            if 'optimizer_state_dict' in ckpt:
+                optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+            if 'scheduler_state_dict' in ckpt and 'scheduler' in dir():
+                scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+            if scaler is not None and ckpt.get('scaler_state_dict') is not None:
+                scaler.load_state_dict(ckpt['scaler_state_dict'])
+            start_epoch = ckpt.get('epoch', 0) + 1
+            best_val_mrr = ckpt.get('best_val_mrr', ckpt.get('metrics', {}).get('MRR', 0.0))
+            patience_counter = ckpt.get('patience_counter', 0)
+            global_step = ckpt.get('global_step', 0)
+            smooth_loss = ckpt.get('smooth_loss', None)
+            print(f"Resumed from epoch {start_epoch - 1} (val MRR={best_val_mrr:.4f}, patience={patience_counter})")
+
+    avg_loss = float(smooth_loss or 0.0)
+    if start_epoch > args.epochs:
+        print(f"Checkpoint already finished epoch {args.epochs}, skipping training loop")
 
     if active_modalities is not None:
         print(f"Active modalities: {', '.join(sorted(active_modalities))}")
 
-    global_step = 0
+    ema = EMA(model, decay=0.999) if device.type == 'cuda' else None
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+        cal = _calibrate_vram(model, dataset, neg_sampler, loss_fn, optimizer, scaler, args, device)
+        if cal['batch_size'] != args.batch_size or cal['num_negatives'] != args.num_negatives:
+            print(f"  [CALIBRATE] Applying: bs {args.batch_size}->{cal['batch_size']} neg {args.num_negatives}->{cal['num_negatives']} ga {args.grad_accum_steps}->{cal['grad_accum_steps']}")
+            args.batch_size = cal['batch_size']
+            args.num_negatives = cal['num_negatives']
+            args.grad_accum_steps = cal['grad_accum_steps']
+            args.eval_batch_size = cal['eval_batch_size']
+            neg_sampler = NegativeSampler(dataset, num_negatives=args.num_negatives, device=device)
+            train_loader = DataLoader(
+                train_dataset, batch_size=args.batch_size, shuffle=True,
+                num_workers=args.num_workers, pin_memory=True,
+                persistent_workers=(args.num_workers > 0),
+                prefetch_factor=2 if args.num_workers > 0 else None,
+                drop_last=True,
+            )
+            warmup_steps = getattr(args, 'warmup_steps', 0)
+            total_steps = ((train_triples.size(0) + args.batch_size - 1) // args.batch_size // args.grad_accum_steps) * args.epochs
+            def lr_lambda(step):
+                if warmup_steps > 0 and step < warmup_steps:
+                    return step / max(1, warmup_steps)
+                decay_steps = max(1, total_steps - warmup_steps)
+                progress = (step - warmup_steps) / decay_steps
+                return 0.5 * (1.0 + __import__('math').cos(__import__('math').pi * max(0.0, min(1.0, progress))))
+            scheduler = LambdaLR(optimizer, lr_lambda)
+            print(f"  [CALIBRATE] DataLoader rebuilt: bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum_steps}")
+        else:
+            print(f"  [CALIBRATE] Current config optimal: bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum_steps}")
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
-        perm = torch.randperm(train_triples.size(0))
-        shuffled = train_triples[perm]
         epoch_loss = torch.tensor(0.0, device=device)
         num_batches = 0
 
         pbar = tqdm(
-            range(0, shuffled.size(0), args.batch_size),
+            enumerate(train_loader),
             desc=f"Epoch {epoch}/{args.epochs}",
-            total=(shuffled.size(0) + args.batch_size - 1) // args.batch_size,
+            total=len(train_loader),
         )
 
-        for accum_step, start in enumerate(pbar):
-            end = min(start + args.batch_size, shuffled.size(0))
-            batch_triples = shuffled[start:end].to(device)
+        for batch_idx, (batch_triples,) in pbar:
+            batch_triples = batch_triples.to(device, non_blocking=True)
+            if batch_idx == 0 and epoch == start_epoch:
+                mem_trace("train: after batch to device", device)
 
-            neg_triples, _ = neg_sampler.sample(batch_triples.cpu())
-            neg_triples = neg_triples.to(device)
+            neg_triples, _ = neg_sampler.sample(batch_triples)
+            if batch_idx == 0 and epoch == start_epoch:
+                mem_trace("train: after neg sample", device)
 
             num_neg_total = neg_triples.size(0) // batch_triples.size(0)
             if num_neg_total == 0:
@@ -220,8 +437,10 @@ def train_model(
             neg_heads = neg_triples[:, 0]
             neg_rels = neg_triples[:, 1]
             neg_tails = neg_triples[:, 2]
+            if batch_idx == 0 and epoch == start_epoch:
+                mem_trace("train: after all tensors on device", device)
 
-            if accum_step % args.grad_accum_steps == 0:
+            if batch_idx % args.grad_accum_steps == 0:
                 optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast(device_type=device_type, enabled=(device_type == 'cuda')):
@@ -245,6 +464,9 @@ def train_model(
                 if args.n3_weight > 0 and hasattr(model, 'n3_penalty'):
                     loss = loss + args.n3_weight * model.n3_penalty(pos_heads, pos_rels, pos_tails)
 
+            if batch_idx == 0 and epoch == start_epoch:
+                mem_trace("train: after fwd+loss", device)
+
             loss_val = loss.detach()
             scaled_loss = loss / args.grad_accum_steps
 
@@ -256,10 +478,13 @@ def train_model(
             else:
                 scaled_loss.backward()
 
+            if batch_idx == 0 and epoch == start_epoch:
+                mem_trace("train: after bwd", device)
+
             del pos_scores, neg_scores, scaled_loss, loss, batch_triples, neg_triples
             del pos_heads, pos_rels, pos_tails, neg_heads, neg_rels, neg_tails
 
-            if (accum_step + 1) % args.grad_accum_steps == 0 or (start + args.batch_size) >= shuffled.size(0):
+            if (batch_idx + 1) % args.grad_accum_steps == 0 or (batch_idx + 1) == len(train_loader):
                 if scaler is not None:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -280,12 +505,45 @@ def train_model(
                     optimizer.step()
                 scheduler.step()
                 global_step += 1
+                if global_step % 50 == 0:
+                    _safe_empty_cache()
+                if global_step % 20 == 0 and args.device == 'cuda':
+                    _, _used, _shared = _nvidia_smi_memory_gb(args.device)
+                    _loss_str = f"{smooth_loss:.4f}" if smooth_loss is not None else "n/a"
+                    if _used is not None:
+                        pbar.set_postfix(sm=_loss_str, vram=f"{_used:.1f}G", sh=f"{_shared:.2f}G")
+                    if _shared is not None and _shared > 0.5:
+                        print(f"\n  [VRAM] shared={_shared:.2f}GB > 0.5GB threshold — saving checkpoint and aborting")
+                        ckpt_path = output_dir / f"{args.model}{suffix}_last.pt"
+                        torch.save({
+                            'model_state_dict': _unwrap_model(model).state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'scheduler_state_dict': scheduler.state_dict(),
+                            'epoch': epoch,
+                            'global_step': global_step,
+                            'best_val_mrr': best_val_mrr,
+                            'patience_counter': patience_counter,
+                            'smooth_loss': smooth_loss,
+                            'args': {k: v for k, v in vars(args).items() if k != 'device'},
+                        }, ckpt_path)
+                        raise VRAMExceeded(vram_gb=_used, shared_gb=_shared, batch_size=args.batch_size, num_negatives=args.num_negatives)
+
+            if batch_idx == 0 and epoch == start_epoch:
+                mem_trace("train: after step", device)
 
             epoch_loss = epoch_loss + loss_val
             num_batches += 1
 
+            if ema is not None:
+                ema.update(model)
+
+            raw_loss = epoch_loss.item() / max(num_batches, 1)
+            if smooth_loss is None:
+                smooth_loss = raw_loss
+            else:
+                smooth_loss = 0.9 * smooth_loss + 0.1 * raw_loss
             if num_batches % 10 == 0:
-                pbar.set_postfix(loss=f"{epoch_loss.item() / max(num_batches, 1):.4f}")
+                pbar.set_postfix(loss=f"{raw_loss:.4f}", sm=f"{smooth_loss:.4f}")
 
         avg_loss = epoch_loss.item() / max(num_batches, 1)
 
@@ -293,14 +551,18 @@ def train_model(
         if epoch % args.eval_every == 0 or epoch == args.epochs:
             if args.device == "cuda":
                 torch.cuda.empty_cache()
+            if ema is not None:
+                ema.apply(model)
             val_metrics = evaluate_model(model, dataset, evaluator, split='val', device=args.device, batch_size=args.eval_batch_size, max_triples=args.max_eval_triples, num_eval_negatives=args.eval_negatives)
+            if ema is not None:
+                ema.restore(model)
             val_mrr = val_metrics.get("MRR", 0.0)
             if val_mrr > best_val_mrr:
                 best_val_mrr = val_mrr
                 patience_counter = 0
                 if args.save_checkpoints:
                     torch.save({
-                        'model_state_dict': model.state_dict(),
+                        'model_state_dict': _unwrap_model(model).state_dict(),
                         'epoch': epoch,
                         'metrics': val_metrics,
                     }, best_ckpt_path)
@@ -322,6 +584,25 @@ def train_model(
         else:
             print(f"Epoch {epoch:3d} | Loss: {avg_loss:.4f}")
 
+        if args.device == 'cuda':
+            _, used_vram, shared_vram = _nvidia_smi_memory_gb(args.device)
+            if used_vram is not None and shared_vram is not None:
+                print(f"  [VRAM] end-epoch: used={used_vram:.2f}GB shared={shared_vram:.2f}GB")
+
+        if args.save_checkpoints:
+            last_ckpt_path = output_dir / f"{args.model}{suffix}_last.pt"
+            torch.save({
+                'model_state_dict': _unwrap_model(model).state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'scaler_state_dict': scaler.state_dict() if scaler is not None else None,
+                'epoch': epoch,
+                'best_val_mrr': best_val_mrr,
+                'patience_counter': patience_counter,
+                'global_step': global_step,
+                'smooth_loss': smooth_loss,
+            }, last_ckpt_path)
+
         if swa_avg is not None and epoch >= swa_start_epoch:
             for name, param in model.named_parameters():
                 if name not in swa_avg:
@@ -342,12 +623,17 @@ def train_model(
         print(f"SWA: averaged weights over {swa_count} epochs")
         del swa_avg
 
+    loaded_best_ckpt = False
     if args.save_checkpoints and best_ckpt_path.exists():
         ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
-        model.load_state_dict(ckpt['model_state_dict'])
-        print(f"Loaded best checkpoint from epoch {ckpt.get('epoch', '?')}")
-    else:
-        print("No best checkpoint saved, using current model state")
+        loaded_best_ckpt = _load_model_state_with_prefix_fallback(model, ckpt['model_state_dict'], best_ckpt_path)
+        if loaded_best_ckpt:
+            print(f"Loaded best checkpoint from epoch {ckpt.get('epoch', '?')}")
+    if not loaded_best_ckpt and ema is not None:
+        ema.apply(model)
+        print("Using EMA weights for final evaluation")
+    elif not loaded_best_ckpt:
+        print("No compatible best checkpoint available, using current model state")
 
     results["final_train_loss"] = avg_loss
     results["val_mrr"] = best_val_mrr
@@ -383,9 +669,10 @@ def evaluate_model(
     else:
         triples, weights = dataset.get_train_triples()
 
-    is_cascade = isinstance(model, CASCADEKGModel)
-    is_mm = _is_multimodal(model)
-    is_mm_cascade = _is_multimodal_cascade(model)
+    raw_model = _unwrap_model(model)
+    is_cascade = isinstance(raw_model, CASCADEKGModel)
+    is_mm = _is_multimodal(raw_model)
+    is_mm_cascade = _is_multimodal_cascade(raw_model)
 
     if is_cascade or is_mm:
         entity_type_ids = dataset.get_entity_type_ids().to(dev)
@@ -413,7 +700,8 @@ def evaluate_model(
                 wrapped = MultimodalWrapper(model_cpu, entity_modality_ids.cpu())
             else:
                 wrapped = model_cpu
-            result = evaluator.evaluate(wrapped, triples, weights, batch_size=batch_size, device='cpu', max_triples=max_triples, num_eval_negatives=num_eval_negatives, return_details=return_details)
+            cpu_eval = LinkPredictionEvaluator(dataset, device='cpu')
+            result = cpu_eval.evaluate(wrapped, triples, weights, batch_size=batch_size, device='cpu', max_triples=max_triples, num_eval_negatives=num_eval_negatives, return_details=return_details)
             del model_cpu
             gc.collect()
             model.to(dev)
@@ -548,154 +836,222 @@ def auto_tune_config(
     model: nn.Module,
     dataset: KGTriplesDataset,
     args: argparse.Namespace,
-) -> None:
-    """Auto-tune batch_size, num_negatives, grad_accum_steps, eval_batch_size
-    based on available VRAM. Does a trial forward+backward to measure per-sample
-    memory, then computes optimal settings. Modifies args in place."""
-
+) -> dict:
     if args.device == 'cpu':
-        return
+        return {
+            'batch_size': getattr(args, 'batch_size', 64),
+            'num_negatives': getattr(args, 'num_negatives', 8),
+            'grad_accum_steps': getattr(args, 'grad_accum_steps', 4),
+            'eval_batch_size': getattr(args, 'eval_batch_size', 64),
+        }
 
-    print("  [AUTO-TUNE] Probing VRAM...", flush=True)
-    device = torch.device(args.device)
-    is_cascade = isinstance(model, CASCADEKGModel)
-    is_mm = _is_multimodal(model)
-    is_mm_cascade = _is_multimodal_cascade(model)
+    raw_model = _unwrap_model(model)
+    is_cascade = isinstance(raw_model, CASCADEKGModel)
+    is_mm = _is_multimodal(raw_model)
+    is_mm_cascade = _is_multimodal_cascade(raw_model)
+    is_complex = isinstance(raw_model, ComplExModel) or is_mm or is_mm_cascade
 
-    model = model.to(device)
-    torch.cuda.empty_cache()
+    nvidia_total_vram, nvidia_used_vram, _ = _nvidia_smi_memory_gb(args.device)
+    torch_total_vram = torch.cuda.get_device_properties(args.device).total_memory / 1e9
+    total_vram = nvidia_total_vram if nvidia_total_vram is not None else torch_total_vram
 
-    entity_type_ids = dataset.get_entity_type_ids().to(device) if (is_cascade or is_mm) else None
-    entity_modality_ids = dataset.get_entity_modality_ids().to(device) if (is_cascade or is_mm) else None
+    model_vram_gb = torch.cuda.memory_allocated(args.device) / 1e9
+    model_params_gb = sum(p.numel() * p.element_size() for p in model.parameters()) / 1e9
+    optimizer_gb = model_params_gb * 2
+    grad_gb = model_params_gb
+    ema_gb = model_params_gb
+    num_ents = dataset.num_entities
+    neg_sampler_static_kb = (num_ents * 8 * 3) / 1024
+    cuda_ctx_gb = max(0.4, model_vram_gb - model_params_gb)
+    static_gb = cuda_ctx_gb + model_params_gb + optimizer_gb + grad_gb + ema_gb + neg_sampler_static_kb / 1024 / 1024
+
+    safety_gb = 0.3
+    budget_gb = total_vram - safety_gb
+    available_gb = budget_gb - static_gb
+
+    embed_dim = getattr(args, 'embed_dim', 256)
+    emb_per_ent = embed_dim * (2 if is_complex else 1) * 4
+    per_sample_bytes = 3 * 8
+    per_neg_bytes = emb_per_ent * 2
+    per_sample_total = per_sample_bytes + per_neg_bytes * (1 + args.num_negatives)
+    per_sample_total *= 3.5
+    per_sample_kb = per_sample_total / 1024
+
+    available_kb = available_gb * 1024 * 1024
+    max_bs = max(16, int(available_kb / per_sample_kb)) if per_sample_kb > 0 else 32
+
+    per_neg_kb = per_neg_bytes * 3.5 / 1024
+    if available_gb > 0.5:
+        max_neg = min(64, int((available_kb * 0.4) / (per_neg_kb * max_bs)))
+        max_neg = max(4, max_neg)
+        bs_budget_kb = available_kb - max_neg * per_neg_kb * max_bs
+        best_bs = max(16, min(int(bs_budget_kb / per_sample_kb), max_bs, 512))
+        best_neg = max_neg
+    else:
+        best_bs = 16
+        best_neg = 4
+
+    target_eff = getattr(args, 'batch_size', 64) * getattr(args, 'grad_accum_steps', 4)
+    grad_accum = max(2, (target_eff + best_bs - 1) // best_bs)
+    effective_bs = best_bs * grad_accum
+    eval_bs = min(best_bs, 64)
+
+    print(f"  [AUTO-TUNE] VRAM {total_vram:.1f}GB | static overhead {static_gb:.2f}GB (ctx={cuda_ctx_gb:.2f} model={model_params_gb:.2f} opt={optimizer_gb:.2f} grad={grad_gb:.2f} ema={ema_gb:.2f} neg_samp={neg_sampler_static_kb/1024/1024:.2f})")
+    print(f"  [AUTO-TUNE] Available for batch: {available_gb:.2f}GB | per-sample: {per_sample_kb:.0f}KB | max_bs: {max_bs}")
+    print(f"  [AUTO-TUNE] bs {getattr(args, 'batch_size', 64)}->{best_bs} | neg {getattr(args, 'num_negatives', 8)}->{best_neg} | ga {getattr(args, 'grad_accum_steps', 4)}->{grad_accum} | eff {effective_bs} | eval_bs {getattr(args, 'eval_batch_size', 64)}->{eval_bs}")
+    print(f"  [AUTO-TUNE] Will adapt during training if shared GPU memory detected")
+
+    config = {
+        'batch_size': best_bs,
+        'num_negatives': best_neg,
+        'grad_accum_steps': grad_accum,
+        'eval_batch_size': eval_bs,
+    }
+    return config
+
+
+def _calibrate_vram(
+    model: nn.Module,
+    dataset: KGTriplesDataset,
+    neg_sampler: 'NegativeSampler',
+    loss_fn: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: Optional[torch.amp.GradScaler],
+    args: argparse.Namespace,
+    device: torch.device,
+) -> dict:
+    """Binary-search calibration: find largest batch size that fits within target VRAM, then optimize neg/ga."""
+    raw_model = _unwrap_model(model)
+    is_cascade = isinstance(raw_model, CASCADEKGModel)
+    is_mm = _is_multimodal(raw_model)
+    is_mm_cascade = _is_multimodal_cascade(raw_model)
+
+    nvidia_total_vram, _, _ = _nvidia_smi_memory_gb(args.device)
+    total_vram = nvidia_total_vram if nvidia_total_vram is not None else torch.cuda.get_device_properties(args.device).total_memory / 1e9
+    safety_gb = 0.25
+    target_gb = total_vram - safety_gb
+
     train_triples, _ = dataset.get_train_triples()
 
-    print("  [AUTO-TUNE] Warming up forward pass...", flush=True)
-    torch.cuda.reset_peak_memory_stats(device)
-    with torch.no_grad():
-        sample = train_triples[:1].to(device)
-        if is_mm_cascade:
-            model.score(sample[:, 0], sample[:, 1], sample[:, 2], entity_type_ids, entity_modality_ids)
-        elif is_mm:
-            model.score(sample[:, 0], sample[:, 1], sample[:, 2], entity_modality_ids)
-        elif is_cascade:
-            model.score(sample[:, 0], sample[:, 1], sample[:, 2], entity_type_ids, entity_modality_ids)
-        else:
-            model.score(sample[:, 0], sample[:, 1], sample[:, 2])
-    model_mem = torch.cuda.max_memory_allocated(device)
-    print(f"  [AUTO-TUNE] Model memory: {model_mem/1e9:.2f} GB", flush=True)
+    if is_cascade or is_mm_cascade:
+        entity_type_ids = dataset.get_entity_type_ids().to(device)
+        entity_modality_ids = dataset.get_entity_modality_ids().to(device)
 
-    print("  [AUTO-TUNE] Running trial backward pass...", flush=True)
-    trial_bs = min(1, train_triples.size(0))
-    neg_sampler = NegativeSampler(dataset, num_negatives=1)
-    batch = train_triples[:trial_bs].to(device)
-    neg_triples, _ = neg_sampler.sample(batch.cpu())
-    neg_triples = neg_triples.to(device)
-    num_neg_total = max(neg_triples.size(0) // trial_bs, 1)
+    device_type = 'cuda'
 
-    if is_mm or is_mm_cascade:
-        if entity_modality_ids is not None and entity_modality_ids.shape[0] > 1:
-            h_mod = entity_modality_ids[batch[0, 0].item()].item()
-            t_mod = entity_modality_ids[batch[0, 2].item()].item()
-            if h_mod == t_mod:
-                alt_idx = (entity_modality_ids != h_mod).nonzero(as_tuple=True)[0]
-                if alt_idx.numel() > 0:
-                    batch[0, 2] = alt_idx[0]
+    def _probe_step(bs, num_neg_probed):
+        idx = torch.randperm(train_triples.size(0), device='cpu')[:bs]
+        batch = train_triples[idx].to(device)
+        neg_triples, _ = neg_sampler.sample(batch)
+        actual_neg = neg_triples.size(0) // batch.size(0)
+        if actual_neg == 0:
+            actual_neg = 1
+            neg_triples = batch.clone()
 
-    try:
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+        pos_h, pos_r, pos_t = batch[:, 0], batch[:, 1], batch[:, 2]
+        neg_h, neg_r, neg_t = neg_triples[:, 0], neg_triples[:, 1], neg_triples[:, 2]
+
         optimizer.zero_grad(set_to_none=True)
+        _safe_empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
 
-        with torch.amp.autocast(device_type='cuda', enabled=True):
+        with torch.amp.autocast(device_type=device_type, enabled=True):
             if is_mm_cascade:
-                pos_s = model.score(batch[:, 0], batch[:, 1], batch[:, 2], entity_type_ids, entity_modality_ids)
-                neg_s = model.score(neg_triples[:, 0], neg_triples[:, 1], neg_triples[:, 2], entity_type_ids, entity_modality_ids)
+                pos_s = model.score(pos_h, pos_r, pos_t, entity_type_ids, entity_modality_ids)
+                neg_s = model.score(neg_h, neg_r, neg_t, entity_type_ids, entity_modality_ids)
             elif is_mm:
-                pos_s = model.score(batch[:, 0], batch[:, 1], batch[:, 2], entity_modality_ids)
-                neg_s = model.score(neg_triples[:, 0], neg_triples[:, 1], neg_triples[:, 2], entity_modality_ids)
+                mod_ids = dataset.get_entity_modality_ids().to(device)
+                pos_s = model.score(pos_h, pos_r, pos_t, mod_ids)
+                neg_s = model.score(neg_h, neg_r, neg_t, mod_ids)
+                del mod_ids
             elif is_cascade:
-                pos_s = model.score(batch[:, 0], batch[:, 1], batch[:, 2], entity_type_ids, entity_modality_ids)
-                neg_s = model.score(neg_triples[:, 0], neg_triples[:, 1], neg_triples[:, 2], entity_type_ids, entity_modality_ids)
+                pos_s = model.score(pos_h, pos_r, pos_t, entity_type_ids, entity_modality_ids)
+                neg_s = model.score(neg_h, neg_r, neg_t, entity_type_ids, entity_modality_ids)
             else:
-                pos_s = model.score(batch[:, 0], batch[:, 1], batch[:, 2])
-                neg_s = model.score(neg_triples[:, 0], neg_triples[:, 1], neg_triples[:, 2])
-            neg_s = neg_s.view(trial_bs, num_neg_total)
+                pos_s = model.score(pos_h, pos_r, pos_t)
+                neg_s = model.score(neg_h, neg_r, neg_t)
+            neg_s = neg_s.view(batch.size(0), actual_neg)
             pos_s = pos_s.unsqueeze(1)
-            logits = torch.cat([pos_s, neg_s], dim=1)
-            labels = torch.zeros(logits.size(0), dtype=torch.long, device=device)
-            loss = F.cross_entropy(logits / 0.1, labels)
+            loss = loss_fn(pos_s, neg_s)
 
-        loss.backward()
-        peak_mem = torch.cuda.max_memory_allocated(device)
-        batch_overhead = peak_mem - model_mem
-        print(f"  [AUTO-TUNE] Trial peak: {peak_mem/1e9:.2f} GB, overhead: {batch_overhead/1e9:.2f} GB", flush=True)
+        if scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
+        peak_gb = torch.cuda.max_memory_allocated(device) / 1e9
+        _, nvidia_used, nvidia_shared = _nvidia_smi_memory_gb(args.device)
+
+        del pos_s, neg_s, loss, batch, neg_triples, pos_h, pos_r, pos_t, neg_h, neg_r, neg_t
         optimizer.zero_grad(set_to_none=True)
-        del optimizer
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
-            torch.cuda.empty_cache()
-            model.zero_grad()
-            args.batch_size = 2
-            args.num_negatives = 1
-            target_eff = args.batch_size * args.grad_accum_steps
-            args.grad_accum_steps = max(1, target_eff // args.batch_size)
-            args.eval_batch_size = 8
-            print(f"  [AUTO-TUNE] Trial OOM — falling back to minimum: bs=2, neg=1, ga={args.grad_accum_steps}")
-            return
-        raise
+        _safe_empty_cache()
 
-    model.zero_grad()
-    del batch, neg_triples, pos_s, neg_s, loss, sample, neg_sampler
-    if is_cascade or is_mm:
-        del entity_type_ids, entity_modality_ids
-    torch.cuda.empty_cache()
+        nvidia_peak = nvidia_used if nvidia_used is not None else peak_gb
+        nvidia_shared_val = nvidia_shared if nvidia_shared is not None else 0.0
+        return nvidia_peak, nvidia_shared_val, actual_neg
 
-    total_samples = trial_bs * (1 + num_neg_total)
-    mem_per_sample = (batch_overhead / total_samples) * 1.2
-    if is_mm or is_mm_cascade:
-        mem_per_sample *= 1.3
+    neg_for_probe = args.num_negatives
+    neg_actual = neg_for_probe
 
-    total_vram = torch.cuda.get_device_properties(device).total_memory
-    safety_factor = 0.85
-    usable_vram = total_vram * safety_factor
-    available = usable_vram - model_mem
+    peak_small, shared_small, neg_actual = _probe_step(64, neg_for_probe)
+    print(f"  [CALIBRATE] warmup probe: bs=64 neg={neg_actual} peak={peak_small:.2f}GB shared={shared_small:.2f}GB")
 
-    orig_bs = args.batch_size
-    orig_neg = args.num_negatives
-    orig_ga = args.grad_accum_steps
-    orig_eval_bs = args.eval_batch_size
-    target_effective = args.batch_size * args.grad_accum_steps
+    if shared_small > 0.3 or peak_small > target_gb:
+        print(f"  [CALIBRATE] Already at/over budget at bs=64, reducing")
+        new_neg = max(4, neg_actual // 2)
+        new_bs = max(16, 32)
+        new_ga = args.grad_accum_steps
+        return {'batch_size': new_bs, 'num_negatives': new_neg, 'grad_accum_steps': new_ga, 'eval_batch_size': min(new_bs, 64)}
 
-    if available <= 0:
-        print(f"  [AUTO-TUNE] Model ({model_mem/1e9:.2f} GB) exceeds {safety_factor*100:.0f}% of {total_vram/1e9:.1f} GB VRAM")
-        args.batch_size = 2
-        args.num_negatives = 1
-        args.grad_accum_steps = max(1, target_effective // args.batch_size)
-        args.eval_batch_size = 8
-        return
+    lo_bs = 64
+    hi_bs = 2048
+    best_bs = lo_bs
+    best_peak = peak_small
+    max_iters = 6
 
-    max_bs = int(available / (mem_per_sample * (1 + args.num_negatives)))
-    max_bs = max(4, min(max_bs, 256))
+    for i in range(max_iters):
+        mid_bs = (lo_bs + hi_bs) // 2
+        if mid_bs <= lo_bs:
+            break
+        try:
+            peak_mid, shared_mid, _ = _probe_step(mid_bs, neg_for_probe)
+        except RuntimeError:
+            peak_mid = target_gb + 1
+            shared_mid = 0
 
-    if max_bs >= args.batch_size:
-        args.batch_size = max_bs
+        print(f"  [CALIBRATE] bsearch iter {i+1}: bs={mid_bs} neg={neg_actual} peak={peak_mid:.2f}GB shared={shared_mid:.2f}GB (target={target_gb:.2f}GB)")
+
+        if shared_mid > 0.5 or peak_mid > target_gb:
+            hi_bs = mid_bs
+        else:
+            best_bs = mid_bs
+            best_peak = peak_mid
+            lo_bs = mid_bs
+
+    headroom_gb = target_gb - best_peak
+    print(f"  [CALIBRATE] bsearch result: bs={best_bs} peak={best_peak:.2f}GB headroom={headroom_gb:.2f}GB")
+
+    if headroom_gb > 0.5 and neg_actual < 128:
+        extra_neg_budget = headroom_gb * 0.4
+        neg_per_gb = 0.0
+        if best_bs >= 128:
+            try:
+                peak_neg_probe, _, _ = _probe_step(best_bs, neg_actual + 8)
+            except RuntimeError:
+                peak_neg_probe = target_gb + 1
+            neg_per_gb = max((peak_neg_probe - best_peak) / 8, 0.001)
+        extra_neg = int(extra_neg_budget / (neg_per_gb * best_bs)) if neg_per_gb > 0 else 0
+        new_neg = min(neg_actual + extra_neg, 128)
+        new_neg = max(4, new_neg)
     else:
-        args.batch_size = max(4, max_bs)
-        while args.num_negatives > 2 and args.batch_size < 16:
-            args.num_negatives -= 1
-            max_bs = int(available / (mem_per_sample * (1 + args.num_negatives)))
-            args.batch_size = max(4, min(max_bs, 256))
+        new_neg = neg_actual
 
-    args.grad_accum_steps = max(1, (target_effective + args.batch_size - 1) // args.batch_size)
+    new_bs = best_bs
+    target_eff = args.batch_size * args.grad_accum_steps
+    new_ga = max(2, (target_eff + new_bs - 1) // new_bs)
 
-    eval_multiplier = 3.5 if is_cascade else 2.5
-    eval_mem_per_triple = mem_per_sample * (args.eval_negatives + 1) * eval_multiplier
-    max_eval_bs = int(available / max(eval_mem_per_triple, 1))
-    args.eval_batch_size = max(4, min(max_eval_bs, 256))
-
-    print(f"  [AUTO-TUNE] VRAM {total_vram/1e9:.1f}GB | Model {model_mem/1e9:.2f}GB | Available {available/1e9:.2f}GB | Per-sample {mem_per_sample/1e6:.1f}MB")
-    print(f"  [AUTO-TUNE] bs {orig_bs}->{args.batch_size} | neg {orig_neg}->{args.num_negatives} | ga {orig_ga}->{args.grad_accum_steps} | eff {args.batch_size*args.grad_accum_steps} | eval_bs {orig_eval_bs}->{args.eval_batch_size}")
+    print(f"  [CALIBRATE] Final: bs={new_bs} neg={new_neg} ga={new_ga} eff={new_bs*new_ga} target_vram={target_gb:.2f}GB")
+    return {'batch_size': new_bs, 'num_negatives': new_neg, 'grad_accum_steps': new_ga, 'eval_batch_size': min(new_bs, 64)}
 
 
 def bootstrap_ci(
@@ -783,7 +1139,13 @@ def tune_hparams(
 
         set_seed(args.seed)
         model = build_model(args, dataset)
-        auto_tune_config(model, dataset, args)
+        model = model.to(args.device)
+        mem_trace(f"after model.to({args.device})", args.device)
+        tuned = auto_tune_config(model, dataset, args)
+        if tuned:
+            for k, v in tuned.items():
+                setattr(args, k, v)
+        mem_trace("after auto_tune", args.device)
 
         display_name = f"tune_{args.model}"
         print(f"Training {display_name} (trial {trial+1})...")
@@ -814,13 +1176,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="KG Link Prediction Training")
     parser.add_argument('--model', type=str, default='cascade',
                         choices=['transe', 'complex', 'cascade', 'multimodal_complex', 'multimodal_cascade', 'all'])
-    parser.add_argument('--embed-dim', type=int, default=128)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--embed-dim', type=int, default=256)
+    parser.add_argument('--lr', type=float, default=5e-4)
     parser.add_argument('--weight-decay', type=float, default=1e-3)
-    parser.add_argument('--margin', type=float, default=1.0)
-    parser.add_argument('--dropout', type=float, default=0.3,
+    parser.add_argument('--margin', type=float, default=2.0)
+    parser.add_argument('--dropout', type=float, default=0.1,
                         help='Dropout probability for embeddings (0=disabled)')
-    parser.add_argument('--label-smoothing', type=float, default=0.1,
+    parser.add_argument('--label-smoothing', type=float, default=0.05,
                         help='Label smoothing for ranking loss (0=disabled)')
     parser.add_argument('--temperature', type=float, default=0.1,
                         help='Temperature for InfoNCE loss (lower=sharper)')
@@ -836,14 +1198,16 @@ def main() -> None:
                         help='Number of warmup steps for LR scheduler (0=no warmup)')
     parser.add_argument('--num-negatives', type=int, default=8)
     parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--num-workers', type=int, default=0,
+                        help='Number of DataLoader workers (0=main process, safe on Windows)')
     parser.add_argument('--grad-accum-steps', type=int, default=4)
     parser.add_argument('--eval-batch-size', type=int, default=64)
     parser.add_argument('--max-eval-triples', type=int, default=10000,
                         help='Max triples to evaluate (subsampled)')
-    parser.add_argument('--eval-negatives', type=int, default=50,
+    parser.add_argument('--eval-negatives', type=int, default=100,
                         help='Number of type-constrained negative samples for evaluation')
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--eval-every', type=int, default=5)
+    parser.add_argument('--eval-every', type=int, default=1)
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output-dir', type=str, default='simulation/data/kg/results')
@@ -856,7 +1220,7 @@ def main() -> None:
                         help='Load optimizer state when resuming (uses more RAM)')
     parser.add_argument('--benchmark', action='store_true',
                         help='Run all models sequentially and produce a comparison JSON')
-    parser.add_argument('--patience', type=int, default=10,
+    parser.add_argument('--patience', type=int, default=3,
                         help='Early stopping patience on val MRR')
     parser.add_argument('--ablation', type=str, default=None,
                         choices=[None, 'no_pid', 'no_modality', 'no_type'],
@@ -960,7 +1324,14 @@ def main() -> None:
     test_t, _ = dataset.get_test_triples()
     print(f"Train: {train_t.size(0)}, Val: {val_t.size(0)}, Test: {test_t.size(0)}")
 
-    evaluator = LinkPredictionEvaluator(dataset)
+    base_output_dir = Path(args.output_dir)
+    subdir = 'testkg' if args.test_kg else 'real'
+    if base_output_dir.name != subdir:
+        base_output_dir = base_output_dir / subdir
+    base_output_dir.mkdir(parents=True, exist_ok=True)
+    args.output_dir = str(base_output_dir)
+
+    evaluator = LinkPredictionEvaluator(dataset, device=args.device)
 
     if args.tune:
         tune_hparams(dataset, evaluator, args)
@@ -1010,11 +1381,109 @@ def main() -> None:
         display_name = f"{display_name}{mod_display}"
         print(f"\nModel: {display_name} | Total params: {total_params:,} | Trainable: {trainable_params,}")
 
-        auto_tune_config(model, dataset, args)
+        model = model.to(args.device)
+        mem_trace(f"after model.to({args.device})", args.device)
+
+        tuned = auto_tune_config(model, dataset, args)
+        if tuned:
+            for k, v in tuned.items():
+                setattr(args, k, v)
+        mem_trace("after auto_tune", args.device)
 
         active_mods = MODALITY_SET_MAP.get(modalities, {"text"})
         print(f"Training {display_name} on {args.device}...")
-        results = train_model(model, dataset, evaluator, args, active_modalities=active_mods)
+
+        max_vram_retries = 5
+        for vram_attempt in range(max_vram_retries + 1):
+            try:
+                results = train_model(model, dataset, evaluator, args, active_modalities=active_mods)
+                break
+            except VRAMExceeded as ve:
+                if vram_attempt >= max_vram_retries:
+                    print(f"\n[VRAM] Max retries ({max_vram_retries}) exhausted for {display_name}")
+                    if args.benchmark:
+                        all_results[display_name] = {
+                            "model": display_name,
+                            "ablation": ablation,
+                            "modalities": modalities,
+                            "error": str(ve),
+                        }
+                        break
+                    raise
+                old_bs, old_neg = args.batch_size, args.num_negatives
+                if args.num_negatives > 4:
+                    args.num_negatives = max(4, args.num_negatives // 2)
+                    print(f"\n[VRAM] Retry {vram_attempt+1}: neg {old_neg} → {args.num_negatives} (shared was {ve.shared_gb:.2f}GB)")
+                elif args.batch_size > 16:
+                    args.batch_size = max(16, args.batch_size // 2)
+                    print(f"\n[VRAM] Retry {vram_attempt+1}: bs {old_bs} → {args.batch_size} (shared was {ve.shared_gb:.2f}GB)")
+                elif args.grad_accum > 1:
+                    args.grad_accum = max(1, args.grad_accum // 2)
+                    print(f"\n[VRAM] Retry {vram_attempt+1}: ga unchanged (already min bs/neg), ga {args.grad_accum} (shared was {ve.shared_gb:.2f}GB)")
+                else:
+                    print(f"\n[VRAM] Cannot reduce further — bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum}")
+                    if args.benchmark:
+                        all_results[display_name] = {
+                            "model": display_name,
+                            "ablation": ablation,
+                            "modalities": modalities,
+                            "error": str(ve),
+                        }
+                        break
+                    raise
+                if args.device == 'cuda':
+                    torch.cuda.empty_cache()
+                set_seed(args.seed)
+                model = build_model(args, dataset).to(args.device)
+                print(f"[VRAM] Rebuilt model with bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum}")
+            except RuntimeError as re_err:
+                if 'out of memory' in str(re_err).lower():
+                    if vram_attempt >= max_vram_retries:
+                        print(f"\n[VRAM] Max retries ({max_vram_retries}) exhausted (CUDA OOM)")
+                        if args.benchmark:
+                            all_results[display_name] = {
+                                "model": display_name,
+                                "ablation": ablation,
+                                "modalities": modalities,
+                                "error": str(re_err),
+                            }
+                            break
+                        raise
+                    old_bs, old_neg = args.batch_size, args.num_negatives
+                    if args.num_negatives > 4:
+                        args.num_negatives = max(4, args.num_negatives // 2)
+                    elif args.batch_size > 16:
+                        args.batch_size = max(16, args.batch_size // 2)
+                    else:
+                        print(f"\n[VRAM] CUDA OOM and cannot reduce further")
+                        if args.benchmark:
+                            all_results[display_name] = {
+                                "model": display_name,
+                                "ablation": ablation,
+                                "modalities": modalities,
+                                "error": str(re_err),
+                            }
+                            break
+                        raise
+                    if args.device == 'cuda':
+                        torch.cuda.empty_cache()
+                    set_seed(args.seed)
+                    model = build_model(args, dataset).to(args.device)
+                    print(f"\n[VRAM] Retry {vram_attempt+1} (OOM): bs {old_bs} → {args.batch_size}, neg {old_neg} → {args.num_negatives}")
+                else:
+                    print(f"\nModel {display_name} failed: {re_err}")
+                    if args.benchmark:
+                        all_results[display_name] = {
+                            "model": display_name,
+                            "ablation": ablation,
+                            "modalities": modalities,
+                            "error": str(re_err),
+                        }
+                        break
+                    raise
+        else:
+            if args.benchmark and display_name in all_results:
+                continue
 
         if args.n_bootstrap > 0:
             print(f"Computing bootstrap CIs (n={args.n_bootstrap}, ci={args.ci})...")

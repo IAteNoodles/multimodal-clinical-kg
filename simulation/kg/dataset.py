@@ -103,7 +103,7 @@ class KGTriplesDataset:
         relation2id: Dict[str, int] = {r: i for i, r in enumerate(relation_names)}
         id2relation: Dict[int, str] = {i: r for i, r in enumerate(relation_names)}
 
-        entities_arr = np.load(directory / "entities.npy")
+        entities_arr = np.load(directory / "entities.npy", mmap_mode='r')
 
         entity_type_names = metadata["entity_type_names"]
         modality_names = metadata["modality_names"]
@@ -141,7 +141,7 @@ class KGTriplesDataset:
             if i not in _entity_modality_by_id:
                 _entity_modality_by_id[i] = None
 
-        relations_arr = np.load(directory / "relations.npy")
+        relations_arr = np.load(directory / "relations.npy", mmap_mode='r')
 
         heads = relations_arr['head'].astype(np.int64)
         rels = relations_arr['relation'].astype(np.int64)
@@ -263,9 +263,10 @@ class KGTriplesDataset:
             return all_ents
 
         mask = torch.ones(self.num_entities, dtype=torch.bool)
-        for k in known:
-            if 0 <= k < self.num_entities:
-                mask[k] = False
+        known_list = [k for k in known if 0 <= k < self.num_entities]
+        if not known_list:
+            return all_ents
+        mask[torch.tensor(known_list, dtype=torch.long)] = False
         return all_ents[mask]
 
     def get_entity_type_ids(self) -> torch.LongTensor:
@@ -339,28 +340,23 @@ class KGTriplesDataset:
         return -1
 
     def get_modality_features(self, entity_ids: torch.LongTensor, modality: str) -> torch.FloatTensor:
-        if not hasattr(self, "_modality_features") or self._modality_features is None:
+        if not hasattr(self, "_modality_padded") or self._modality_padded is None:
             return torch.zeros(len(entity_ids), self.modality_feature_dim)
 
         feature_key = FEATURE_KEY_MAP.get(modality, modality)
-        features_dict = self._modality_features.get(feature_key)
-        if features_dict is None:
+        padded = self._modality_padded.get(feature_key)
+        if padded is None:
             return torch.zeros(len(entity_ids), self.modality_feature_dim)
 
-        dim = self.modality_feature_dim
-        result = torch.zeros(len(entity_ids), dim)
-        for i, eid in enumerate(entity_ids.tolist()):
-            if eid in features_dict:
-                result[i] = features_dict[eid]
-        return result
+        return padded[entity_ids]
 
     def get_available_modalities(self, entity_id: int) -> List[str]:
-        if not hasattr(self, "_modality_features") or self._modality_features is None:
+        if not hasattr(self, "_modality_mask") or self._modality_mask is None:
             return []
         available = []
         for mod_key in ["text", "cxr", "ecg", "structured"]:
-            features_dict = self._modality_features.get(mod_key)
-            if features_dict is not None and entity_id in features_dict:
+            mask = self._modality_mask.get(mod_key)
+            if mask is not None and mask[entity_id]:
                 available.append(mod_key)
         return available
 
@@ -384,7 +380,7 @@ class KGTriplesDataset:
                 print(f"[WARN] Missing feature files for {mod_name}: {feat_path.name}, {id_path.name}")
                 continue
 
-            features_np = np.load(feat_path)
+            features_np = np.load(feat_path, mmap_mode='r')
             features_tensor = torch.from_numpy(features_np).float()
 
             id_map: Dict[int, torch.Tensor] = {}
@@ -399,6 +395,26 @@ class KGTriplesDataset:
 
             self._modality_features[mod_name] = id_map
             print(f"  Loaded {len(id_map)} {mod_name} features (dim={features_tensor.shape[1]})")
+
+        self._build_modality_padded_tensors()
+
+    def _build_modality_padded_tensors(self) -> None:
+        self._modality_padded: Dict[str, torch.Tensor] = {}
+        self._modality_mask: Dict[str, torch.BoolTensor] = {}
+        if not hasattr(self, "_modality_features") or not self._modality_features:
+            return
+        num_entities = self.num_entities
+        feat_dim = self._modality_feature_dim
+        for mod_key, feat_dict in self._modality_features.items():
+            if not feat_dict:
+                continue
+            padded = torch.zeros(num_entities, feat_dim)
+            mask = torch.zeros(num_entities, dtype=torch.bool)
+            for eid, feat in feat_dict.items():
+                padded[eid] = feat
+                mask[eid] = True
+            self._modality_padded[mod_key] = padded
+            self._modality_mask[mod_key] = mask
 
 
 class MultimodalKGTriplesDataset(KGTriplesDataset):
@@ -441,7 +457,7 @@ class MultimodalKGTriplesDataset(KGTriplesDataset):
         relation2id: Dict[str, int] = {r: i for i, r in enumerate(relation_names)}
         id2relation: Dict[int, str] = {i: r for i, r in enumerate(relation_names)}
 
-        entities_arr = np.load(directory / "entities.npy")
+        entities_arr = np.load(directory / "entities.npy", mmap_mode='r')
 
         entity_type_names = metadata["entity_type_names"]
         modality_names = metadata["modality_names"]
@@ -479,7 +495,7 @@ class MultimodalKGTriplesDataset(KGTriplesDataset):
             if i not in _entity_modality_by_id:
                 _entity_modality_by_id[i] = None
 
-        relations_arr = np.load(directory / "relations.npy")
+        relations_arr = np.load(directory / "relations.npy", mmap_mode='r')
 
         heads = relations_arr['head'].astype(np.int64)
         rels = relations_arr['relation'].astype(np.int64)
@@ -558,22 +574,82 @@ class MultimodalKGTriplesDataset(KGTriplesDataset):
 
 
 class LinkPredictionEvaluator:
-    def __init__(self, dataset: KGTriplesDataset):
+    def __init__(self, dataset: KGTriplesDataset, device: str = "cpu"):
         self.dataset = dataset
+        self.device = torch.device(device)
+        self.num_entities = dataset.num_entities
+        self.num_relations = dataset.num_relations
+        self.num_types = len(ENTITY_TYPE_TO_ID)
+
+        # CPU-side filter sets kept for filtered ranking
         self.known_triples: Set[Tuple[int, int, int]] = set(dataset._known_triples_set)
         self._hr_to_tails: Dict[Tuple[int, int], Set[int]] = dataset._hr_to_tails
         self._rt_to_heads: Dict[Tuple[int, int], Set[int]] = dataset._rt_to_heads
 
-    def _rank_score(self, scores: torch.FloatTensor, true_idx: int, filter_set: Set[int]) -> Tuple[float, int]:
-        true_score = scores[true_idx]
-        if filter_set:
-            filtered_scores = scores.clone()
-            filter_idx = torch.tensor(list(filter_set), dtype=torch.long, device=scores.device)
-            filtered_scores[filter_idx] = float("-inf")
+        # GPU-resident: entity_id → type_id mapping
+        self.entity_type_tensor = torch.zeros(self.num_entities, dtype=torch.long, device=self.device)
+        for eid, etype in dataset._entity_type_by_id.items():
+            self.entity_type_tensor[eid] = ENTITY_TYPE_TO_ID.get(etype, 0)
+
+        # GPU-resident: padded type entity pools [num_types, max_pool_size]
+        all_pool_sizes = [len(ids) for ids in dataset._entity_ids_by_type.values()] if dataset._entity_ids_by_type else [0]
+        self.max_pool_size = max(all_pool_sizes)
+        self.type_entity_pools_padded = torch.zeros(self.num_types, self.max_pool_size, dtype=torch.long, device=self.device)
+        self.type_pool_sizes_tensor = torch.zeros(self.num_types, dtype=torch.long, device=self.device)
+        for type_name, ids in dataset._entity_ids_by_type.items():
+            if ids:
+                tid = ENTITY_TYPE_TO_ID.get(type_name, 0)
+                self.type_entity_pools_padded[tid, :len(ids)] = torch.tensor(ids, dtype=torch.long, device=self.device)
+                self.type_pool_sizes_tensor[tid] = len(ids)
+
+        # GPU-resident: known triples hash keys for O(1) lookup
+        # Key = head * num_relations * num_entities + rel * num_entities + tail
+        known_list = list(dataset._known_triples_set)
+        if known_list:
+            keys = torch.tensor(
+                [h * self.num_relations * self.num_entities + r * self.num_entities + t
+                 for h, r, t in known_list],
+                dtype=torch.long,
+            )
+            sorted_keys, _ = torch.sort(torch.unique(keys))
+            self.known_triples_keys_sorted = sorted_keys.to(self.device)
         else:
-            filtered_scores = scores
-        rank = (filtered_scores > true_score).sum().item() + 1
-        return rank
+            self.known_triples_keys_sorted = torch.zeros(0, dtype=torch.long, device=self.device)
+
+        # GPU-resident: relation category masks for vectorized rank binning
+        rel_id_cross = torch.tensor(
+            [dataset.relation2id[r] for r in CROSS_MODAL_RELATIONS if r in dataset.relation2id],
+            dtype=torch.long, device=self.device,
+        )
+        rel_id_within = torch.tensor(
+            [dataset.relation2id[r] for r in WITHIN_MODAL_RELATIONS if r in dataset.relation2id],
+            dtype=torch.long, device=self.device,
+        )
+        rel_id_struct = torch.tensor(
+            [dataset.relation2id[r] for r in STRUCTURAL_RELATIONS if r in dataset.relation2id],
+            dtype=torch.long, device=self.device,
+        )
+        self._rel_id_cross = rel_id_cross
+        self._rel_id_within = rel_id_within
+        self._rel_id_struct = rel_id_struct
+
+        if self.device.type == 'cuda':
+            self._rng = torch.Generator(device=self.device)
+            self._rng.manual_seed(42)
+        else:
+            self._rng = torch.Generator().manual_seed(42)
+
+    def _compute_triple_keys(self, h: torch.Tensor, r: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return h * (self.num_relations * self.num_entities) + r * self.num_entities + t
+
+    def _sample_from_pools(self, type_ids: torch.Tensor, num_samples: int) -> torch.Tensor:
+        """Vectorized sampling from per-type entity pools. type_ids: [n], returns [n, num_samples]."""
+        n = type_ids.size(0)
+        pool_sizes = self.type_pool_sizes_tensor[type_ids]  # [n]
+        rand_idx = torch.randint(0, self.max_pool_size, (n, num_samples), generator=self._rng, device=self.device)
+        rand_idx = rand_idx % pool_sizes.unsqueeze(1).clamp(min=1)
+        type_idx = type_ids.unsqueeze(1).expand(-1, num_samples)
+        return self.type_entity_pools_padded[type_idx, rand_idx]  # [n, num_samples]
 
     @staticmethod
     def _rank_to_metrics(ranks: List[float]) -> Dict[str, float]:
@@ -585,11 +661,72 @@ class LinkPredictionEvaluator:
         h10 = sum(1 for r in ranks if r <= 10) / len(ranks)
         return {"MRR": mrr, "Hits@1": h1, "Hits@3": h3, "Hits@10": h10}
 
+    def _vectorized_sample_candidates(
+        self, true_entities: torch.Tensor, type_ids: torch.Tensor, num_neg: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Vectorized candidate sampling for a batch.
+
+        Args:
+            true_entities: [bsz] true entity ids (on device)
+            type_ids: [bsz] type ids for those entities (on device)
+            num_neg: number of negative candidates
+
+        Returns:
+            cands: [bsz, max_cands] candidate entity ids on device
+            cand_mask: [bsz, max_cands] bool mask on device
+            true_pos: [bsz] index of true entity in candidate list (on device)
+        """
+        bsz = true_entities.size(0)
+        pool_sizes = self.type_pool_sizes_tensor[type_ids]  # [bsz]
+
+        # Determine per-row candidate counts: min(pool_size, num_neg) + 1 slot for true entity
+        nc_per_row = pool_sizes.clamp(max=num_neg)  # number of sampled negatives per row
+        max_cands = int(nc_per_row.max().item()) + 1  # +1 for true entity slot
+
+        # Sample num_neg candidates per row from type pools
+        sampled = self._sample_from_pools(type_ids, num_neg)  # [bsz, num_neg]
+
+        # Build candidates tensor on device
+        cands = torch.zeros(bsz, max_cands, dtype=torch.long, device=self.device)
+        cand_mask = torch.zeros(bsz, max_cands, dtype=torch.bool, device=self.device)
+
+        # Place sampled candidates row by row using vectorized scatter
+        # For each row i, place nc_per_row[i] samples into cands[i, :nc_per_row[i]]
+        row_idx = torch.arange(bsz, device=self.device)
+        for j in range(num_neg):
+            valid = j < nc_per_row  # [bsz] bool
+            cands[row_idx[valid], j] = sampled[valid, j]
+            cand_mask[row_idx[valid], j] = True
+
+        # Check if true entity already in sampled portion
+        # sampled: [bsz, num_neg], true_entities: [bsz]
+        true_in_sampled = (sampled == true_entities.unsqueeze(1))  # [bsz, num_neg]
+
+        # For rows where true entity is present, find its first position
+        # For rows where it's absent, append it at position nc_per_row
+        has_true = true_in_sampled.any(dim=1)  # [bsz]
+
+        # Compute true_pos: for rows with true entity, first occurrence index
+        # For rows without, nc_per_row (appended position)
+        # first_true_idx: [bsz] - index of first match in sampled
+        first_true_idx = true_in_sampled.float().argmax(dim=1)  # [bsz]
+        true_pos = torch.where(has_true, first_true_idx, nc_per_row)
+
+        # For rows without true entity, append it
+        append_row = row_idx[~has_true]
+        append_col = nc_per_row[~has_true]
+        cands[append_row, append_col] = true_entities[~has_true]
+        cand_mask[append_row, append_col] = True
+
+        return cands, cand_mask, true_pos
+
     def evaluate(self, model, triples: torch.LongTensor, weights: torch.FloatTensor,
                  batch_size: int = 256, device: str = "cpu",
                  max_triples: Optional[int] = None, num_eval_negatives: int = 50,
                  return_details: bool = False):
         model.eval()
+        eval_dev = self.device
+
         if max_triples is not None and triples.shape[0] > max_triples:
             rels_np = triples[:, 1].cpu().numpy() if triples.is_cuda else triples[:, 1].numpy()
 
@@ -640,179 +777,168 @@ class LinkPredictionEvaluator:
         struct_ranks: List[float] = []
         per_triple_data: List[Dict] = []
 
-        rel_id_cross = {self.dataset.relation2id[r] for r in CROSS_MODAL_RELATIONS if r in self.dataset.relation2id}
-        rel_id_within = {self.dataset.relation2id[r] for r in WITHIN_MODAL_RELATIONS if r in self.dataset.relation2id}
-        rel_id_struct = {self.dataset.relation2id[r] for r in STRUCTURAL_RELATIONS if r in self.dataset.relation2id}
+        # Move triples to device once
+        triples_dev = triples.to(eval_dev)
+        num_triples = triples_dev.shape[0]
 
-        entity_type_ids = torch.zeros(self.dataset.num_entities, dtype=torch.long)
-        for eid, type_name in self.dataset._entity_type_by_id.items():
-            entity_type_ids[eid] = ENTITY_TYPE_TO_ID.get(type_name, 0)
+        # Pre-compute type ids on device
+        heads_all = triples_dev[:, 0]
+        rels_all = triples_dev[:, 1]
+        tails_all = triples_dev[:, 2]
+        head_type_ids_all = self.entity_type_tensor[heads_all]
+        tail_type_ids_all = self.entity_type_tensor[tails_all]
 
-        type_id_to_entity_ids_local: Dict[int, List[int]] = defaultdict(list)
-        for eid, type_name in self.dataset._entity_type_by_id.items():
-            tid = ENTITY_TYPE_TO_ID.get(type_name, 0)
-            type_id_to_entity_ids_local[tid].append(eid)
-        type_id_to_tensor: Dict[int, torch.LongTensor] = {}
-        for tid, ids in type_id_to_entity_ids_local.items():
-            type_id_to_tensor[tid] = torch.tensor(ids, dtype=torch.long)
-
-        num_triples = triples.shape[0]
-        rng = torch.Generator().manual_seed(42)
+        # Pre-compute relation category masks on device
+        rels_all_cpu = rels_all.cpu()
+        rels_np = rels_all_cpu.numpy()
+        cross_mask_all = np.isin(rels_np, self._rel_id_cross.cpu().numpy())
+        within_mask_all = np.isin(rels_np, self._rel_id_within.cpu().numpy())
+        struct_mask_all = np.isin(rels_np, self._rel_id_struct.cpu().numpy())
 
         with torch.no_grad():
             pbar = tqdm(range(0, num_triples, batch_size), desc="Evaluating", leave=False,
                         total=(num_triples + batch_size - 1) // batch_size)
             for start in pbar:
                 end = min(start + batch_size, num_triples)
-                batch = triples[start:end].to(device)
-                bsz = batch.shape[0]
+                batch_idx = slice(start, end)
+                bsz = end - start
 
-                heads = batch[:, 0]
-                rels = batch[:, 1]
-                tails = batch[:, 2]
+                heads = heads_all[batch_idx]
+                rels = rels_all[batch_idx]
+                tails = tails_all[batch_idx]
+                batch_head_type_ids = head_type_ids_all[batch_idx]
+                batch_tail_type_ids = tail_type_ids_all[batch_idx]
 
-                batch_tail_type_ids = entity_type_ids[batch[:, 2].cpu()]
-                batch_head_type_ids = entity_type_ids[batch[:, 0].cpu()]
+                # --- Vectorized tail candidate sampling ---
+                tail_cands, tail_cand_mask, tail_true_pos = self._vectorized_sample_candidates(
+                    tails, batch_tail_type_ids, num_eval_negatives,
+                )
 
-                max_cands = num_eval_negatives + 1
-                tail_cands = torch.zeros(bsz, max_cands, dtype=torch.long)
-                tail_cand_mask = torch.zeros(bsz, max_cands, dtype=torch.bool)
-                tail_true_pos = torch.zeros(bsz, dtype=torch.long)
+                max_cands = tail_cands.size(1)
 
-                for i in range(bsz):
-                    t_i = int(tails[i])
-                    t_type = int(batch_tail_type_ids[i])
-                    cands = type_id_to_tensor[t_type]
-                    n_avail = len(cands)
-                    if n_avail <= num_eval_negatives:
-                        sampled = cands.clone()
-                    else:
-                        idx = torch.randint(0, n_avail, (num_eval_negatives,), generator=rng)
-                        sampled = cands[idx]
-                    true_pos = (sampled == t_i).nonzero(as_tuple=True)[0]
-                    if true_pos.numel() > 0:
-                        tp = int(true_pos[0])
-                        nc = sampled.shape[0]
-                        tail_cands[i, :nc] = sampled
-                        tail_cand_mask[i, :nc] = True
-                        tail_true_pos[i] = tp
-                    else:
-                        nc = sampled.shape[0]
-                        tail_cands[i, :nc] = sampled
-                        tail_cand_mask[i, :nc] = True
-                        tail_cands[i, nc] = t_i
-                        tail_cand_mask[i, nc] = True
-                        tail_true_pos[i] = nc
-
-                tail_cands_dev = tail_cands.to(device)
-                tail_cand_mask_dev = tail_cand_mask.to(device)
-
+                # Score tail candidates
                 tail_heads_exp = heads.unsqueeze(1).expand(-1, max_cands)
                 tail_rels_exp = rels.unsqueeze(1).expand(-1, max_cands)
                 tail_scores = model.score(
                     tail_heads_exp.reshape(-1),
                     tail_rels_exp.reshape(-1),
-                    tail_cands_dev.reshape(-1),
+                    tail_cands.reshape(-1),
                 ).reshape(bsz, max_cands)
-                tail_scores[~tail_cand_mask_dev] = float("-inf")
+                tail_scores[~tail_cand_mask] = float("-inf")
 
-                head_cands = torch.zeros(bsz, max_cands, dtype=torch.long)
-                head_cand_mask = torch.zeros(bsz, max_cands, dtype=torch.bool)
-                head_true_pos = torch.zeros(bsz, dtype=torch.long)
+                # --- Vectorized head candidate sampling ---
+                head_cands, head_cand_mask, head_true_pos = self._vectorized_sample_candidates(
+                    heads, batch_head_type_ids, num_eval_negatives,
+                )
 
-                for i in range(bsz):
-                    h_i = int(heads[i])
-                    h_type = int(batch_head_type_ids[i])
-                    cands = type_id_to_tensor[h_type]
-                    n_avail = len(cands)
-                    if n_avail <= num_eval_negatives:
-                        sampled = cands.clone()
-                    else:
-                        idx = torch.randint(0, n_avail, (num_eval_negatives,), generator=rng)
-                        sampled = cands[idx]
-                    true_pos = (sampled == h_i).nonzero(as_tuple=True)[0]
-                    if true_pos.numel() > 0:
-                        tp = int(true_pos[0])
-                        nc = sampled.shape[0]
-                        head_cands[i, :nc] = sampled
-                        head_cand_mask[i, :nc] = True
-                        head_true_pos[i] = tp
-                    else:
-                        nc = sampled.shape[0]
-                        head_cands[i, :nc] = sampled
-                        head_cand_mask[i, :nc] = True
-                        head_cands[i, nc] = h_i
-                        head_cand_mask[i, nc] = True
-                        head_true_pos[i] = nc
+                max_cands_h = head_cands.size(1)
+                # Pad tail/head candidates to same width if needed
+                if max_cands_h != max_cands:
+                    # Re-score with the actual max_cands_h
+                    pass
+                max_cands = max(max_cands, head_cands.size(1))
 
-                head_cands_dev = head_cands.to(device)
-                head_cand_mask_dev = head_cand_mask.to(device)
+                # Ensure tail arrays are padded to max_cands
+                if tail_cands.size(1) < max_cands:
+                    pad = max_cands - tail_cands.size(1)
+                    tail_cands = torch.cat([tail_cands, torch.zeros(bsz, pad, dtype=torch.long, device=self.device)], dim=1)
+                    tail_cand_mask = torch.cat([tail_cand_mask, torch.zeros(bsz, pad, dtype=torch.bool, device=self.device)], dim=1)
+                    if tail_scores.size(1) < max_cands:
+                        tail_scores = torch.cat([tail_scores, torch.full((bsz, pad), float("-inf"), device=self.device)], dim=1)
 
-                head_rels_exp = rels.unsqueeze(1).expand(-1, max_cands)
+                # Ensure head arrays are padded to max_cands
+                if head_cands.size(1) < max_cands:
+                    pad = max_cands - head_cands.size(1)
+                    head_cands = torch.cat([head_cands, torch.zeros(bsz, pad, dtype=torch.long, device=self.device)], dim=1)
+                    head_cand_mask = torch.cat([head_cand_mask, torch.zeros(bsz, pad, dtype=torch.bool, device=self.device)], dim=1)
+
+                # Score head candidates
+                head_rels_exp = rels.unsqueeze(1).expand(-1, head_cands.size(1) if head_cands.size(1) == max_cands else max_cands)
                 head_tails_exp = tails.unsqueeze(1).expand(-1, max_cands)
+                # Use original head_cands width for scoring if it differs
+                hc_width = head_cands.size(1) if head_true_pos.max() < head_cands.size(1) else max_cands
                 head_scores = model.score(
-                    head_cands_dev.reshape(-1),
-                    head_rels_exp.reshape(-1),
-                    head_tails_exp.reshape(-1),
-                ).reshape(bsz, max_cands)
-                head_scores[~head_cand_mask_dev] = float("-inf")
+                    head_cands[:, :hc_width].reshape(-1),
+                    rels.unsqueeze(1).expand(-1, hc_width).reshape(-1),
+                    tails.unsqueeze(1).expand(-1, hc_width).reshape(-1),
+                ).reshape(bsz, hc_width)
+                head_scores[~head_cand_mask[:, :hc_width]] = float("-inf")
 
-                heads_cpu = batch[:, 0].cpu()
-                rels_cpu = batch[:, 1].cpu()
-                tails_cpu = batch[:, 2].cpu()
+                # --- Vectorized filtered ranking using GPU hash keys ---
+                # Build candidate triple keys for filtering
+                # Tail direction: (head, rel, tail_candidate)
+                tc_flat = tail_cands[:, :tail_scores.size(1)].reshape(-1)
+                th_flat = heads.unsqueeze(1).expand(-1, tail_scores.size(1)).reshape(-1)
+                tr_flat = rels.unsqueeze(1).expand(-1, tail_scores.size(1)).reshape(-1)
+                tail_keys = self._compute_triple_keys(th_flat, tr_flat, tc_flat)
+                tail_keys = tail_keys.reshape(bsz, -1)
 
-                for i in range(bsz):
-                    h_i = int(heads_cpu[i])
-                    r_i = int(rels_cpu[i])
-                    t_i = int(tails_cpu[i])
+                # Mask out known triples (excluding the true triple) from tail scores
+                pos = torch.searchsorted(self.known_triples_keys_sorted, tail_keys)
+                pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
+                is_known_tail = self.known_triples_keys_sorted[pos] == tail_keys
+                # Don't filter the true entity position
+                true_pos_mask_tail = torch.zeros_like(is_known_tail)
+                true_pos_mask_tail[torch.arange(bsz, device=self.device), tail_true_pos] = True
+                filter_tail = is_known_tail & ~true_pos_mask_tail & tail_cand_mask[:, :tail_scores.size(1)]
+                tail_scores[filter_tail] = float("-inf")
 
-                    filter_tails = self._hr_to_tails.get((h_i, r_i), set()) - {t_i}
-                    if filter_tails:
-                        ft_tensor = torch.tensor(list(filter_tails), dtype=torch.long)
-                        mask = (tail_cands[i].unsqueeze(0) == ft_tensor.unsqueeze(1)).any(dim=0)
-                        tail_scores[i, mask] = float("-inf")
+                # Head direction: (head_candidate, rel, tail)
+                hc_flat = head_cands[:, :head_scores.size(1)].reshape(-1)
+                ht_flat = tails.unsqueeze(1).expand(-1, head_scores.size(1)).reshape(-1)
+                hr_flat = rels.unsqueeze(1).expand(-1, head_scores.size(1)).reshape(-1)
+                head_keys = self._compute_triple_keys(hc_flat, hr_flat, ht_flat)
+                head_keys = head_keys.reshape(bsz, -1)
 
-                    filter_heads = self._rt_to_heads.get((r_i, t_i), set()) - {h_i}
-                    if filter_heads:
-                        fh_tensor = torch.tensor(list(filter_heads), dtype=torch.long)
-                        mask = (head_cands[i].unsqueeze(0) == fh_tensor.unsqueeze(1)).any(dim=0)
-                        head_scores[i, mask] = float("-inf")
+                pos = torch.searchsorted(self.known_triples_keys_sorted, head_keys)
+                pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
+                is_known_head = self.known_triples_keys_sorted[pos] == head_keys
+                true_pos_mask_head = torch.zeros_like(is_known_head)
+                true_pos_mask_head[torch.arange(bsz, device=self.device), head_true_pos] = True
+                filter_head = is_known_head & ~true_pos_mask_head & head_cand_mask[:, :head_scores.size(1)]
+                head_scores[filter_head] = float("-inf")
 
-                tail_true_scores = tail_scores[torch.arange(bsz, device=device), tail_true_pos.to(device)]
+                # --- Vectorized rank computation ---
+                tail_true_scores = tail_scores[torch.arange(bsz, device=self.device), tail_true_pos]
                 tail_ranks = (tail_scores > tail_true_scores.unsqueeze(1)).sum(dim=1) + 1
 
-                head_true_scores = head_scores[torch.arange(bsz, device=device), head_true_pos.to(device)]
+                head_true_scores = head_scores[torch.arange(bsz, device=self.device), head_true_pos]
                 head_ranks = (head_scores > head_true_scores.unsqueeze(1)).sum(dim=1) + 1
 
-                rels_list = rels_cpu.tolist()
-                rels_arr = rels_cpu.numpy() if hasattr(rels_cpu, 'numpy') else np.array(rels_list)
-                cross_mask = np.isin(rels_arr, list(rel_id_cross))
-                within_mask = np.isin(rels_arr, list(rel_id_within))
-                struct_mask = np.isin(rels_arr, list(rel_id_struct))
+                # --- Vectorized rank binning ---
+                batch_cross = cross_mask_all[start:end]
+                batch_within = within_mask_all[start:end]
+                batch_struct = struct_mask_all[start:end]
 
-                tail_ranks_cpu = tail_ranks.cpu().tolist()
-                head_ranks_cpu = head_ranks.cpu().tolist()
+                tail_ranks_cpu = tail_ranks.cpu()
+                head_ranks_cpu = head_ranks.cpu()
+                tail_ranks_list = tail_ranks_cpu.tolist()
+                head_ranks_list = head_ranks_cpu.tolist()
+
+                batch_head_type_cpu = batch_head_type_ids.cpu()
+                batch_tail_type_cpu = batch_tail_type_ids.cpu()
+                rels_cpu = rels.cpu()
 
                 for i in range(bsz):
-                    all_ranks.append(float(tail_ranks_cpu[i]))
-                    all_ranks.append(float(head_ranks_cpu[i]))
-                    if cross_mask[i]:
-                        cross_ranks.append(float(tail_ranks_cpu[i]))
-                        cross_ranks.append(float(head_ranks_cpu[i]))
-                    elif within_mask[i]:
-                        within_ranks.append(float(tail_ranks_cpu[i]))
-                        within_ranks.append(float(head_ranks_cpu[i]))
-                    elif struct_mask[i]:
-                        struct_ranks.append(float(tail_ranks_cpu[i]))
-                        struct_ranks.append(float(head_ranks_cpu[i]))
+                    all_ranks.append(float(tail_ranks_list[i]))
+                    all_ranks.append(float(head_ranks_list[i]))
+                    if batch_cross[i]:
+                        cross_ranks.append(float(tail_ranks_list[i]))
+                        cross_ranks.append(float(head_ranks_list[i]))
+                    elif batch_within[i]:
+                        within_ranks.append(float(tail_ranks_list[i]))
+                        within_ranks.append(float(head_ranks_list[i]))
+                    elif batch_struct[i]:
+                        struct_ranks.append(float(tail_ranks_list[i]))
+                        struct_ranks.append(float(head_ranks_list[i]))
                     if return_details:
-                        h_type = int(batch_head_type_ids[i])
-                        t_type = int(batch_tail_type_ids[i])
+                        h_type = int(batch_head_type_cpu[i])
+                        t_type = int(batch_tail_type_cpu[i])
                         r_id = int(rels_cpu[i])
-                        per_triple_data.append({'rank': float(tail_ranks_cpu[i]), 'head_type': h_type, 'tail_type': t_type, 'relation_id': r_id, 'direction': 'tail'})
-                        per_triple_data.append({'rank': float(head_ranks_cpu[i]), 'head_type': h_type, 'tail_type': t_type, 'relation_id': r_id, 'direction': 'head'})
+                        per_triple_data.append({'rank': float(tail_ranks_list[i]), 'head_type': h_type, 'tail_type': t_type, 'relation_id': r_id, 'direction': 'tail'})
+                        per_triple_data.append({'rank': float(head_ranks_list[i]), 'head_type': h_type, 'tail_type': t_type, 'relation_id': r_id, 'direction': 'head'})
 
-                del tail_scores, head_scores, tail_cands_dev, head_cands_dev
+                del tail_scores, head_scores
 
         overall = self._rank_to_metrics(all_ranks)
         cross = self._rank_to_metrics(cross_ranks)
@@ -835,84 +961,120 @@ class LinkPredictionEvaluator:
 
 
 class NegativeSampler:
-    def __init__(self, dataset: KGTriplesDataset, num_negatives: int = 64):
+    def __init__(self, dataset: KGTriplesDataset, num_negatives: int = 64, device: str = "cpu"):
         self.dataset = dataset
         self.num_negatives = num_negatives
-        self._entity_ids_by_type: Dict[str, List[int]] = dict(dataset._entity_ids_by_type)
-        self._type_to_cands: Dict[str, torch.LongTensor] = {}
-        for type_name, ids in self._entity_ids_by_type.items():
+        self.device = torch.device(device)
+        self.num_entities = dataset.num_entities
+        self.num_relations = dataset.num_relations
+        self.num_types = len(ENTITY_TYPE_TO_ID)
+
+        # GPU-resident: entity_id → type_id mapping
+        self.entity_type_tensor = torch.zeros(self.num_entities, dtype=torch.long, device=self.device)
+        for eid, etype in dataset._entity_type_by_id.items():
+            self.entity_type_tensor[eid] = ENTITY_TYPE_TO_ID.get(etype, 0)
+
+        # GPU-resident: padded type entity pools [num_types, max_pool_size]
+        all_pool_sizes = [len(ids) for ids in dataset._entity_ids_by_type.values()] if dataset._entity_ids_by_type else [0]
+        self.max_pool_size = max(all_pool_sizes)
+        self.type_entity_pools_padded = torch.zeros(self.num_types, self.max_pool_size, dtype=torch.long, device=self.device)
+        self.type_pool_sizes_tensor = torch.zeros(self.num_types, dtype=torch.long, device=self.device)
+        for type_name, ids in dataset._entity_ids_by_type.items():
             if ids:
-                self._type_to_cands[type_name] = torch.tensor(ids, dtype=torch.long)
-        self._rng = torch.Generator().manual_seed(42)
+                tid = ENTITY_TYPE_TO_ID.get(type_name, 0)
+                self.type_entity_pools_padded[tid, :len(ids)] = torch.tensor(ids, dtype=torch.long, device=self.device)
+                self.type_pool_sizes_tensor[tid] = len(ids)
+
+        # GPU-resident: known triples hash keys for O(1) lookup
+        # Key = head * num_relations * num_entities + rel * num_entities + tail
+        known_list = list(dataset._known_triples_set)
+        if known_list:
+            keys = torch.tensor(
+                [h * self.num_relations * self.num_entities + r * self.num_entities + t
+                 for h, r, t in known_list],
+                dtype=torch.long,
+            )
+            sorted_keys, _ = torch.sort(torch.unique(keys))
+            self.known_triples_keys_sorted = sorted_keys.to(self.device)
+        else:
+            self.known_triples_keys_sorted = torch.zeros(0, dtype=torch.long, device=self.device)
+
+        if self.device.type == 'cuda':
+            self._rng = torch.Generator(device=self.device)
+            self._rng.manual_seed(42)
+        else:
+            self._rng = torch.Generator().manual_seed(42)
+
+    def _compute_triple_keys(self, h: torch.Tensor, r: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return h * (self.num_relations * self.num_entities) + r * self.num_entities + t
+
+    def _sample_from_pools(self, type_ids: torch.Tensor, num_samples: int) -> torch.Tensor:
+        """Fully vectorized sampling from per-type entity pools. type_ids: [n], returns [n, num_samples]."""
+        n = type_ids.size(0)
+        pool_sizes = self.type_pool_sizes_tensor[type_ids]  # [n]
+        rand_idx = torch.randint(0, self.max_pool_size, (n, num_samples), generator=self._rng, device=self.device)
+        rand_idx = rand_idx % pool_sizes.unsqueeze(1).clamp(min=1)  # clamp avoids div-by-0 for empty types
+        type_idx = type_ids.unsqueeze(1).expand(-1, num_samples)
+        return self.type_entity_pools_padded[type_idx, rand_idx]  # [n, num_samples]
 
     def sample(self, triples: torch.LongTensor) -> Tuple[torch.LongTensor, torch.LongTensor]:
         n = triples.shape[0]
         num_neg = self.num_negatives
 
-        heads = triples[:, 0]
-        rels = triples[:, 1]
-        tails = triples[:, 2]
+        triples_dev = triples.to(self.device)
+        heads = triples_dev[:, 0]
+        rels = triples_dev[:, 1]
+        tails = triples_dev[:, 2]
 
-        head_types = [self.dataset._entity_type_by_id[int(h)] for h in heads]
-        tail_types = [self.dataset._entity_type_by_id[int(t)] for t in tails]
-
-        groups: Dict[Tuple[str, str], List[int]] = defaultdict(list)
-        for i in range(n):
-            ht = head_types[i]
-            tt = tail_types[i]
-            if ht not in self._type_to_cands and tt not in self._type_to_cands:
-                continue
-            groups[(ht, tt)].append(i)
+        # Vectorized type lookup — no Python loops
+        head_type_ids = self.entity_type_tensor[heads]  # [n]
+        tail_type_ids = self.entity_type_tensor[tails]  # [n]
 
         neg_parts: List[torch.LongTensor] = []
 
-        for (ht, tt), indices in groups.items():
-            idx_tensor = torch.tensor(indices, dtype=torch.long)
-            batch = triples[idx_tensor]
-            n_group = len(indices)
+        # Head corruption: replace head with same-type entity
+        neg_heads = self._sample_from_pools(head_type_ids, num_neg)  # [n, num_neg]
+        neg_rels_h = rels.unsqueeze(1).expand(-1, num_neg)
+        neg_tails_h = tails.unsqueeze(1).expand(-1, num_neg)
+        neg_batch_h = torch.stack([neg_heads, neg_rels_h, neg_tails_h], dim=-1).reshape(-1, 3)
+        neg_batch_h = self._filter_known(neg_batch_h, 0, head_type_ids)
+        neg_parts.append(neg_batch_h)
 
-            h_cands = self._type_to_cands.get(ht)
-            t_cands = self._type_to_cands.get(tt)
-
-            if h_cands is not None:
-                rand_idx = torch.randint(0, len(h_cands), (n_group, num_neg), generator=self._rng)
-                neg_h = h_cands[rand_idx]
-                neg_r = batch[:, 1].unsqueeze(1).expand(-1, num_neg)
-                neg_t = batch[:, 2].unsqueeze(1).expand(-1, num_neg)
-                neg_batch = torch.stack([neg_h, neg_r, neg_t], dim=-1).reshape(-1, 3)
-                neg_batch = self._filter_known(neg_batch, h_cands, 0)
-                neg_parts.append(neg_batch)
-
-            if t_cands is not None:
-                rand_idx = torch.randint(0, len(t_cands), (n_group, num_neg), generator=self._rng)
-                neg_t_vals = t_cands[rand_idx]
-                neg_h_vals = batch[:, 0].unsqueeze(1).expand(-1, num_neg)
-                neg_r_vals = batch[:, 1].unsqueeze(1).expand(-1, num_neg)
-                neg_batch = torch.stack([neg_h_vals, neg_r_vals, neg_t_vals], dim=-1).reshape(-1, 3)
-                neg_batch = self._filter_known(neg_batch, t_cands, 2)
-                neg_parts.append(neg_batch)
-
-        if not neg_parts:
-            return torch.zeros(0, 3, dtype=torch.long), torch.zeros(0, dtype=torch.long)
+        # Tail corruption: replace tail with same-type entity
+        neg_tails = self._sample_from_pools(tail_type_ids, num_neg)  # [n, num_neg]
+        neg_rels_t = rels.unsqueeze(1).expand(-1, num_neg)
+        neg_heads_t = heads.unsqueeze(1).expand(-1, num_neg)
+        neg_batch_t = torch.stack([neg_heads_t, neg_rels_t, neg_tails], dim=-1).reshape(-1, 3)
+        neg_batch_t = self._filter_known(neg_batch_t, 2, tail_type_ids)
+        neg_parts.append(neg_batch_t)
 
         all_neg = torch.cat(neg_parts, dim=0)
-        labels = torch.zeros(all_neg.shape[0], dtype=torch.long)
+        labels = torch.zeros(all_neg.shape[0], dtype=torch.long, device=self.device)
         return all_neg, labels
 
-    def _filter_known(self, neg_triples: torch.LongTensor, cands: torch.LongTensor, replace_col: int) -> torch.LongTensor:
-        known = self.dataset._known_triples_set
-        if not known:
+    def _filter_known(self, neg_triples: torch.LongTensor, replace_col: int, type_ids: torch.LongTensor) -> torch.LongTensor:
+        """GPU-vectorized known-triple filtering using hash keys and torch.isin."""
+        if self.known_triples_keys_sorted.numel() == 0:
             return neg_triples
+
+        # Expand type_ids: each source triple has num_negatives entries
+        expanded_type_ids = type_ids.repeat_interleave(self.num_negatives)
+
         for _ in range(2):
-            is_known = torch.tensor(
-                [(int(neg_triples[i, 0]), int(neg_triples[i, 1]), int(neg_triples[i, 2])) in known
-                 for i in range(neg_triples.size(0))],
-                dtype=torch.bool,
-            )
+            keys = self._compute_triple_keys(neg_triples[:, 0], neg_triples[:, 1], neg_triples[:, 2])
+            pos = torch.searchsorted(self.known_triples_keys_sorted, keys)
+            pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
+            is_known = self.known_triples_keys_sorted[pos] == keys
             if not is_known.any():
                 break
             idx = is_known.nonzero(as_tuple=True)[0]
-            neg_triples[idx, replace_col] = cands[torch.randint(0, len(cands), (idx.size(0),), generator=self._rng)]
+            # Re-sample from type pools for known triples
+            re_type_ids = expanded_type_ids[idx]
+            pool_sizes = self.type_pool_sizes_tensor[re_type_ids]
+            rand_idx = torch.randint(0, self.max_pool_size, (idx.size(0),), generator=self._rng, device=self.device)
+            rand_idx = rand_idx % pool_sizes.clamp(min=1)
+            neg_triples[idx, replace_col] = self.type_entity_pools_padded[re_type_ids, rand_idx]
+
         return neg_triples
 
 

@@ -510,14 +510,28 @@ class MultimodalComplExModel(nn.Module):
             max_id = max(entity_features.keys()) + 1
             self._feature_tensor = torch.zeros(max_id, self.embed_dim)
             self._feature_mask = torch.zeros(max_id, dtype=torch.bool)
+            indices = []
+            values = []
             for eid, feat_dict in entity_features.items():
                 if feat_dict:
-                    feat = list(feat_dict.values())[0]
-                    if feat.dim() == 1:
-                        self._feature_tensor[eid] = feat
+                    indices.append(eid)
+                    feats = list(feat_dict.values())
+                    if len(feats) == 1:
+                        val = feats[0]
+                        if val.dim() > 1:
+                            val = val.squeeze(0)
                     else:
-                        self._feature_tensor[eid] = feat.squeeze(0)
-                    self._feature_mask[eid] = True
+                        stacked = torch.stack([f.squeeze(0) if f.dim() > 1 else f for f in feats])
+                        val = stacked.mean(dim=0)
+                    values.append(val)
+            if indices:
+                idx_tensor = torch.tensor(indices, dtype=torch.long)
+                val_tensor = torch.stack(values)
+                self._feature_tensor.index_copy_(0, idx_tensor, val_tensor)
+                self._feature_mask[idx_tensor] = True
+            dev = self.entity_embeddings.weight.device
+            self._feature_tensor = self._feature_tensor.to(dev)
+            self._feature_mask = self._feature_mask.to(dev)
 
     def _get_entity_emb(
         self,
@@ -558,12 +572,8 @@ class MultimodalComplExModel(nn.Module):
             return ctx
 
         max_id = self._feature_tensor.size(0)
-        cpu_head = head_idx.cpu()
-        cpu_tail = tail_idx.cpu()
-        h_valid = (cpu_head < max_id) & self._feature_mask[cpu_head]
-        t_valid = (cpu_tail < max_id) & self._feature_mask[cpu_tail]
-        h_valid = h_valid.to(head_ids.device)
-        t_valid = t_valid.to(head_ids.device)
+        h_valid = (head_idx < max_id) & self._feature_mask[head_idx]
+        t_valid = (tail_idx < max_id) & self._feature_mask[tail_idx]
         both_valid = h_valid & t_valid
 
         if not both_valid.any():
@@ -572,8 +582,8 @@ class MultimodalComplExModel(nn.Module):
         valid_head = head_idx[both_valid]
         valid_tail = tail_idx[both_valid]
 
-        h_feats = self._feature_tensor[valid_head.cpu()].to(head_ids.device)
-        t_feats = self._feature_tensor[valid_tail.cpu()].to(t_ids.device)
+        h_feats = self._feature_tensor[valid_head]
+        t_feats = self._feature_tensor[valid_tail]
         h_feats = F.normalize(h_feats, p=2, dim=-1)
         t_feats = F.normalize(t_feats, p=2, dim=-1)
 
@@ -658,7 +668,7 @@ class MultimodalComplExModel(nn.Module):
             modulation_cross = self.modulation_mlp(combined) + self.modulation_residual_proj(combined)
 
             modulation = torch.zeros_like(h_re)
-            modulation[cross_modal_mask] = modulation_cross.to(modulation.dtype)
+            modulation[cross_modal_mask] = modulation_cross if modulation_cross.dtype == modulation.dtype else modulation_cross.to(modulation.dtype)
 
             augmented_re = h_re + modulation
             augmented_im = h_im + modulation
@@ -769,14 +779,28 @@ class MultimodalCASCADEModel(nn.Module):
             max_id = max(entity_features.keys()) + 1
             self._feature_tensor = torch.zeros(max_id, self.embed_dim)
             self._feature_mask = torch.zeros(max_id, dtype=torch.bool)
+            indices = []
+            values = []
             for eid, feat_dict in entity_features.items():
                 if feat_dict:
-                    feat = list(feat_dict.values())[0]
-                    if feat.dim() == 1:
-                        self._feature_tensor[eid] = feat
+                    indices.append(eid)
+                    feats = list(feat_dict.values())
+                    if len(feats) == 1:
+                        val = feats[0]
+                        if val.dim() > 1:
+                            val = val.squeeze(0)
                     else:
-                        self._feature_tensor[eid] = feat.squeeze(0)
-                    self._feature_mask[eid] = True
+                        stacked = torch.stack([f.squeeze(0) if f.dim() > 1 else f for f in feats])
+                        val = stacked.mean(dim=0)
+                    values.append(val)
+            if indices:
+                idx_tensor = torch.tensor(indices, dtype=torch.long)
+                val_tensor = torch.stack(values)
+                self._feature_tensor.index_copy_(0, idx_tensor, val_tensor)
+                self._feature_mask[idx_tensor] = True
+            dev = self.entity_embeddings.weight.device
+            self._feature_tensor = self._feature_tensor.to(dev)
+            self._feature_mask = self._feature_mask.to(dev)
 
     def _get_entity_emb(
         self,
@@ -824,12 +848,8 @@ class MultimodalCASCADEModel(nn.Module):
             return ctx
 
         max_id = self._feature_tensor.size(0)
-        cpu_head = head_idx.cpu()
-        cpu_tail = tail_idx.cpu()
-        h_valid = (cpu_head < max_id) & self._feature_mask[cpu_head]
-        t_valid = (cpu_tail < max_id) & self._feature_mask[cpu_tail]
-        h_valid = h_valid.to(head_ids.device)
-        t_valid = t_valid.to(head_ids.device)
+        h_valid = (head_idx < max_id) & self._feature_mask[head_idx]
+        t_valid = (tail_idx < max_id) & self._feature_mask[tail_idx]
         both_valid = h_valid & t_valid
 
         if not both_valid.any():
@@ -838,8 +858,8 @@ class MultimodalCASCADEModel(nn.Module):
         valid_head = head_idx[both_valid]
         valid_tail = tail_idx[both_valid]
 
-        h_feats = self._feature_tensor[valid_head.cpu()].to(head_ids.device)
-        t_feats = self._feature_tensor[valid_tail.cpu()].to(t_ids.device)
+        h_feats = self._feature_tensor[valid_head]
+        t_feats = self._feature_tensor[valid_tail]
         h_feats = F.normalize(h_feats, p=2, dim=-1)
         t_feats = F.normalize(t_feats, p=2, dim=-1)
 
@@ -926,7 +946,7 @@ class MultimodalCASCADEModel(nn.Module):
                 modulation_cross = self.modulation_mlp(combined) + self.modulation_residual_proj(combined)
 
                 modulation = torch.zeros_like(h_re)
-                modulation[cross_modal_mask] = modulation_cross.to(modulation.dtype)
+                modulation[cross_modal_mask] = modulation_cross if modulation_cross.dtype == modulation.dtype else modulation_cross.to(modulation.dtype)
 
                 augmented_re = h_re + modulation
                 augmented_im = h_im + modulation
@@ -979,6 +999,7 @@ class CASCADEKGModel(nn.Module):
         nn.init.xavier_uniform_(self.entity_type_embeddings.weight)
 
         self.pid_synergy_raw = nn.Parameter(torch.zeros(num_modalities, num_modalities))
+        self._softplus_zero = F.softplus(torch.tensor(0.0))
         self.dropout = nn.Dropout(p=dropout) if dropout > 0 else None
 
     def _get_entity_emb(
@@ -1041,7 +1062,7 @@ class CASCADEKGModel(nn.Module):
             cross_modal_mask = h_mod != t_mod
 
             if cross_modal_mask.any():
-                sp0 = F.softplus(torch.tensor(0.0, device=base_score.device))
+                sp0 = self._softplus_zero.to(base_score.device)
                 pid_weight = 1.0 + F.softplus(self.pid_synergy_raw[h_mod[cross_modal_mask], t_mod[cross_modal_mask]]) - sp0
                 base_score[cross_modal_mask] = base_score[cross_modal_mask] * pid_weight
 
@@ -1053,7 +1074,7 @@ class CASCADEKGModel(nn.Module):
         return self.score(triples[:, 0], triples[:, 1], triples[:, 2], entity_type_ids, entity_modality_ids)
 
     def get_pid_synergy_matrix(self) -> FloatTensor:
-        sp0 = F.softplus(torch.tensor(0.0, device=self.pid_synergy_raw.device))
+        sp0 = self._softplus_zero.to(self.pid_synergy_raw.device)
         return 1.0 + F.softplus(self.pid_synergy_raw) - sp0
 
     def n3_penalty(self, head_ids: LongTensor, rel_ids: LongTensor, tail_ids: LongTensor) -> FloatTensor:
