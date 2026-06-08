@@ -192,6 +192,7 @@ class ClinicalKG:
     relations: List[Relation] = field(default_factory=list)
     entity_type_counts: Dict[str, int] = field(default_factory=dict)
     relation_type_counts: Dict[str, int] = field(default_factory=dict)
+    _relation_set: set = field(default_factory=set)
 
     def add_entity(self, entity: Entity) -> None:
         if entity.id not in self.entities:
@@ -199,6 +200,10 @@ class ClinicalKG:
             self.entity_type_counts[entity.type] = self.entity_type_counts.get(entity.type, 0) + 1
 
     def add_relation(self, relation: Relation) -> None:
+        key = (relation.head, relation.relation, relation.tail)
+        if key in self._relation_set:
+            return
+        self._relation_set.add(key)
         self.relations.append(relation)
         self.relation_type_counts[relation.relation] = self.relation_type_counts.get(relation.relation, 0) + 1
 
@@ -337,62 +342,67 @@ def extract_chexpert_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFr
 
     print("Loading CheXpert labels...")
     df = pd.read_csv(chexpert_path)
+    df = df.dropna(subset=['subject_id'])
+    df['subject_id'] = df['subject_id'].astype(int)
+    if 'study_id' in df.columns:
+        df['study_id'] = df['study_id'].where(df['study_id'].notna()).astype('Int64')
 
+    # Melt label columns
+    label_cols = {label: csv_col for label, csv_col in zip(CHEXPERT_LABELS, [CHEXPERT_CSV_LABELS[l] for l in CHEXPERT_LABELS]) if csv_col in df.columns}
+    if not label_cols:
+        print("  No CheXpert label columns found")
+        return df, {}
+
+    melt_cols = list(label_cols.values())
+    melted = df.melt(id_vars=['subject_id', 'study_id'], value_vars=melt_cols, var_name='csv_col', value_name='val')
+    melted = melted[melted['val'].notna() & (melted['val'] != 0.0)]
+    melted['weight'] = melted['val'].apply(lambda v: 1.0 if v == 1.0 else 0.5)
+
+    # Reverse map csv_col → label name
+    col_to_label = {v: k for k, v in label_cols.items()}
+    melted['label'] = melted['csv_col'].map(col_to_label)
+
+    print(f"  CheXpert: {len(melted)} positive labels across {melted['subject_id'].nunique()} patients")
+
+    # Add unique entities
+    unique_subjects = melted['subject_id'].unique()
+    for sid in unique_subjects:
+        _add_entity_if_new(kg, f"PAT_{sid}", "Patient", "CXR", str(sid))
+
+    if 'study_id' in melted.columns:
+        valid_studies = melted['study_id'].dropna().unique()
+        for sty in valid_studies:
+            _add_entity_if_new(kg, f"STY_{int(sty)}", "Study", "CXR", str(int(sty)))
+
+    unique_labels = melted['label'].unique()
+    for lbl in unique_labels:
+        _add_entity_if_new(kg, f"FND_CXR_{lbl}", "Finding", "CXR", lbl)
+
+    # Add relations — still loop but only over positive labels (much smaller than full df)
     patient_findings: Dict[int, List[str]] = defaultdict(list)
-    study_findings: Dict[Tuple[int, int], List[str]] = defaultdict(list)
+    for _, row in melted.iterrows():
+        subject_id = int(row['subject_id'])
+        study_id = row.get('study_id')
+        label = row['label']
+        weight = row['weight']
+        fnd_id = f"FND_CXR_{label}"
 
-    for _, row in df.iterrows():
-        subject_id = int(row['subject_id']) if pd.notna(row['subject_id']) else None
-        study_id = int(row['study_id']) if pd.notna(row['study_id']) else None
-        if subject_id is None:
-            continue
+        kg.add_relation(Relation(head=f"PAT_{subject_id}", relation="has_finding", tail=fnd_id, weight=weight))
+        patient_findings[subject_id].append(label)
 
-        _add_entity_if_new(kg, f"PAT_{subject_id}", "Patient", "CXR", str(subject_id))
+        if pd.notna(study_id):
+            kg.add_relation(Relation(head=f"STY_{int(study_id)}", relation="finding_of", tail=fnd_id, weight=1.0))
 
-        if study_id is not None:
-            _add_entity_if_new(kg, f"STY_{study_id}", "Study", "CXR", str(study_id))
+        disease_name = CHEXPERT_TO_DISEASE.get(label)
+        if disease_name:
+            dis_id = f"DIS_{disease_name}"
+            _add_entity_if_new(kg, dis_id, "Disease", "CXR", disease_name)
+            kg.add_relation(Relation(head=fnd_id, relation="indicates", tail=dis_id, weight=1.0))
 
-        for label in CHEXPERT_LABELS:
-            csv_col = CHEXPERT_CSV_LABELS[label]
-            if csv_col not in df.columns:
-                continue
-            val = row.get(csv_col)
-            if pd.isna(val) or val == 0.0:
-                continue
-
-            fnd_id = f"FND_CXR_{label}"
-            _add_entity_if_new(kg, fnd_id, "Finding", "CXR", label)
-
-            if val == 1.0:
-                weight = 1.0
-            elif val == -1.0:
-                weight = 0.5
-            else:
-                weight = 0.0
-
-            if weight > 0:
-                kg.add_relation(Relation(head=f"PAT_{subject_id}", relation="has_finding",
-                                         tail=fnd_id, weight=weight))
-                patient_findings[subject_id].append(label)
-
-                if study_id is not None:
-                    kg.add_relation(Relation(head=f"STY_{study_id}", relation="finding_of",
-                                             tail=fnd_id, weight=1.0))
-                    study_findings[(subject_id, study_id)].append(label)
-
-                disease_name = CHEXPERT_TO_DISEASE.get(label)
-                if disease_name:
-                    dis_id = f"DIS_{disease_name}"
-                    _add_entity_if_new(kg, dis_id, "Disease", "CXR", disease_name)
-                    kg.add_relation(Relation(head=fnd_id, relation="indicates",
-                                             tail=dis_id, weight=1.0))
-
-                anats = CHEXPERT_TO_ANATOMY.get(label, [])
-                for anat in anats:
-                    anat_id = f"ANAT_{anat}"
-                    _add_entity_if_new(kg, anat_id, "Anatomy", "CXR", anat)
-                    kg.add_relation(Relation(head=fnd_id, relation="located_at",
-                                             tail=anat_id, weight=1.0))
+        for anat in CHEXPERT_TO_ANATOMY.get(label, []):
+            anat_id = f"ANAT_{anat}"
+            _add_entity_if_new(kg, anat_id, "Anatomy", "CXR", anat)
+            kg.add_relation(Relation(head=fnd_id, relation="located_at", tail=anat_id, weight=1.0))
 
     print(f"  Extracted {kg.entity_type_counts.get('Finding', 0)} CXR findings, "
           f"{len(patient_findings)} patients with findings")
@@ -434,7 +444,9 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
 
     patient_findings: Dict[int, List[str]] = defaultdict(list)
 
-    for idx, row in df.iterrows():
+    for i, (idx, row) in enumerate(df.iterrows()):
+        if i > 0 and i % 10000 == 0:
+            print(f"    PTB-XL: processed {i}/{len(df)} rows...")
         ecg_id = int(idx)
         patient_id = int(row.get('patient_id', ecg_id))
 
@@ -695,6 +707,7 @@ def build_same_patient_edges(kg: ClinicalKG, chexpert_df: pd.DataFrame, data_dir
 
     count = 0
     for sid, studies in patient_studies.items():
+        studies = studies[:20]  # cap to avoid O(n²) explosion
         for i in range(len(studies)):
             for j in range(i + 1, len(studies)):
                 kg.add_relation(Relation(head=studies[i], relation="same_patient",
@@ -852,7 +865,9 @@ def build_cross_modal_edges(kg: ClinicalKG, chexpert_df: pd.DataFrame, data_dir:
 
     # --- Collect CXR findings per overlapping patient ---
     cxr_findings_by_patient: Dict[int, List[str]] = defaultdict(list)
-    for _, row in chexpert_df.iterrows():
+    for i, (_, row) in enumerate(chexpert_df.iterrows()):
+        if i > 0 and i % 10000 == 0:
+            print(f"    CXR findings: processed {i}/{len(chexpert_df)} rows...")
         subject_id = row.get('subject_id')
         if pd.isna(subject_id):
             continue

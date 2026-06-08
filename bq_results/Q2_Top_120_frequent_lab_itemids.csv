@@ -1,0 +1,121 @@
+itemid,label,category,cnt
+51221,Hematocrit,Hematology,4331615
+50912,Creatinine,Chemistry,4319091
+51265,Platelet Count,Hematology,4214048
+51006,Urea Nitrogen,Chemistry,4202807
+51222,Hemoglobin,Hematology,4181121
+51301,White Blood Cells,Hematology,4157284
+51249,MCHC,Hematology,4152226
+51279,Red Blood Cells,Hematology,4152106
+51250,MCV,Hematology,4152105
+51248,MCH,Hematology,4152104
+51277,RDW,Hematology,4151884
+50971,Potassium,Chemistry,4149507
+50983,Sodium,Chemistry,4111289
+50902,Chloride,Chemistry,4055101
+50882,Bicarbonate,Chemistry,3934240
+50868,Anion Gap,Chemistry,3925590
+50931,Glucose,Chemistry,3621769
+50893,"Calcium, Total",Chemistry,2969588
+50960,Magnesium,Chemistry,2933221
+50970,Phosphate,Chemistry,2814319
+50934,H,Chemistry,2663959
+51678,L,Chemistry,2663927
+50947,I,Chemistry,2663909
+52172,RDW-SD,Hematology,2250874
+50861,Alanine Aminotransferase (ALT),Chemistry,1826482
+50878,Asparate Aminotransferase (AST),Chemistry,1793910
+51237,INR(PT),Hematology,1783315
+51274,PT,Hematology,1782642
+50920,Estimated GFR (MDRD equation),Chemistry,1665881
+51275,PTT,Hematology,1637800
+51256,Neutrophils,Hematology,1611767
+51244,Lymphocytes,Hematology,1611766
+51254,Monocytes,Hematology,1611765
+51146,Basophils,Hematology,1611761
+51200,Eosinophils,Hematology,1611761
+50885,"Bilirubin, Total",Chemistry,1605452
+50863,Alkaline Phosphatase,Chemistry,1602599
+50862,Albumin,Chemistry,1032456
+52075,Absolute Neutrophil Count,Hematology,887962
+52073,Absolute Eosinophil Count,Hematology,847473
+52074,Absolute Monocyte Count,Hematology,847440
+51133,Absolute Lymphocyte Count,Hematology,847408
+52069,Absolute Basophil Count,Hematology,847407
+52033,Specimen Type,Blood Gas,839962
+50820,pH,Blood Gas,754141
+50821,pO2,Blood Gas,698483
+50804,Calculated Total CO2,Blood Gas,698337
+50802,Base Excess,Blood Gas,698337
+50818,pCO2,Blood Gas,698217
+52135,Immature Granulocytes,Hematology,681135
+50813,Lactate,Blood Gas,670016
+50954,Lactate Dehydrogenase (LD),Chemistry,648428
+51003,Troponin T,Chemistry,459872
+50993,Thyroid Stimulating Hormone,Chemistry,409257
+50933,Green Top Hold (plasma),Chemistry,395966
+50808,Free Calcium,Blood Gas,370407
+50887,Blue Top Hold,Chemistry,340050
+50910,Creatine Kinase (CK),Chemistry,334746
+50822,"Potassium, Whole Blood",Blood Gas,333554
+51000,Triglycerides,Chemistry,330107
+50907,"Cholesterol, Total",Chemistry,322767
+51266,Platelet Smear,Hematology,317261
+50904,"Cholesterol, HDL",Chemistry,315909
+50903,Cholesterol Ratio (Total/HDL),Chemistry,314537
+50955,Light Green Top Hold,Chemistry,306915
+50852,% Hemoglobin A1c,Chemistry,295978
+50956,Lipase,Chemistry,293247
+50905,"Cholesterol, LDL, Calculated",Chemistry,288565
+51267,Poikilocytosis,Hematology,281692
+50809,Glucose,Blood Gas,281398
+51137,Anisocytosis,Hematology,277426
+50911,"Creatine Kinase, MB Isoenzyme",Chemistry,266856
+51613,eAG,Chemistry,264480
+51246,Macrocytes,Hematology,257941
+51268,Polychromasia,Hematology,255262
+51233,Hypochromia,Hematology,251652
+51144,Bands,Hematology,249689
+51252,Microcytes,Hematology,249594
+50817,Oxygen Saturation,Blood Gas,239559
+50979,Red Top Hold,Chemistry,236627
+51251,Metamyelocytes,Hematology,227824
+51255,Myelocytes,Hematology,225025
+50976,"Protein, Total",Chemistry,217309
+51143,Atypical Lymphocytes,Hematology,215768
+51007,Uric Acid,Chemistry,192252
+50924,Ferritin,Chemistry,190312
+50812,Intubated,Blood Gas,187329
+50889,C-Reactive Protein,Chemistry,178039
+50930,Globulin,Chemistry,169519
+50824,"Sodium, Whole Blood",Blood Gas,159073
+50952,Iron,Chemistry,156199
+51214,"Fibrinogen, Functional",Hematology,154065
+51260,Ovalocytes,Hematology,147648
+50810,"Hematocrit, Calculated",Blood Gas,144060
+50811,Hemoglobin,Blood Gas,144055
+50998,Transferrin,Chemistry,138796
+50953,"Iron Binding Capacity, Total",Chemistry,138568
+50995,"Thyroxine (T4), Free",Chemistry,134212
+51010,Vitamin B12,Chemistry,133208
+50986,tacroFK,Chemistry,128622
+50825,Temperature,Blood Gas,121926
+50883,"Bilirubin, Direct",Chemistry,120044
+51009,Vancomycin,Chemistry,119231
+50853,25-OH Vitamin D,Chemistry,112354
+50922,Ethanol,Chemistry,111186
+50884,"Bilirubin, Indirect",Chemistry,109931
+50806,"Chloride, Whole Blood",Blood Gas,108168
+50856,Acetaminophen,Chemistry,107481
+50981,Salicylate,Chemistry,105393
+50919,EDTA Hold,Chemistry,104179
+51257,Nucleated Red Cells,Hematology,103893
+50999,Tricyclic Antidepressant Screen,Chemistry,101163
+51218,Granulocyte Count,Hematology,98844
+50963,NTproBNP,Chemistry,98206
+51296,Teardrop Cells,Hematology,96326
+50867,Amylase,Chemistry,96286
+50941,Hepatitis B Surface Antigen,Chemistry,84065
+50816,Oxygen,Blood Gas,84054
+50943,Hepatitis C Virus Antibody,Chemistry,83177
+53161,Estimated GFR (CKD- EPI Refit),Chemistry,81810

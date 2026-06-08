@@ -14,11 +14,11 @@ from torch.utils.data import Dataset
 
 from simulation.kg.extract_entities import ClinicalKG, Entity, Relation
 
-ENTITY_TYPE_TO_ID = {"Finding": 0, "Anatomy": 1, "Disease": 2, "Patient": 3, "Study": 4}
-MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, None: 3}
+ENTITY_TYPE_TO_ID = {"Finding": 0, "Anatomy": 1, "Disease": 2, "Patient": 3, "Study": 4, "Drug": 5, "LabResult": 6, "Procedure": 7, "VitalResult": 8, "Unknown": 9}
+MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, None: 4}
 
-ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study"]
-CROSS_MODAL_RELATIONS = {"suggestive_of"}
+ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "Unknown"]
+CROSS_MODAL_RELATIONS = {"suggestive_of", "treats", "prevents", "contraindicated", "has_focus", "has_intent", "direct_site"}
 WITHIN_MODAL_RELATIONS = {"located_at", "indicates", "modifies", "subsumes"}
 STRUCTURAL_RELATIONS = {"has_finding", "finding_of", "same_patient"}
 
@@ -27,6 +27,7 @@ MODALITY_SET_MAP = {
     "text+image": {"text", "image"},
     "text+image+ecg": {"text", "image", "ecg"},
     "text+image+ecg+structured": {"text", "image", "ecg", "structured"},
+    "text+image+ecg+structured+str": {"text", "image", "ecg", "structured", "str"},
 }
 
 FEATURE_KEY_MAP = {
@@ -34,6 +35,7 @@ FEATURE_KEY_MAP = {
     "image": "cxr",
     "ecg": "ecg",
     "structured": "structured",
+    "str": "str",
 }
 
 
@@ -272,7 +274,7 @@ class KGTriplesDataset:
     def get_entity_type_ids(self) -> torch.LongTensor:
         ids = torch.zeros(self.num_entities, dtype=torch.long)
         for eid, etype in self._entity_type_by_id.items():
-            ids[eid] = ENTITY_TYPE_TO_ID.get(etype, 0)
+            ids[eid] = ENTITY_TYPE_TO_ID.get(etype, 9)
         return ids
 
     def get_entity_modality_ids(self) -> torch.LongTensor:
@@ -354,7 +356,7 @@ class KGTriplesDataset:
         if not hasattr(self, "_modality_mask") or self._modality_mask is None:
             return []
         available = []
-        for mod_key in ["text", "cxr", "ecg", "structured"]:
+        for mod_key in FEATURE_KEY_MAP.values():
             mask = self._modality_mask.get(mod_key)
             if mask is not None and mask[entity_id]:
                 available.append(mod_key)
@@ -372,7 +374,7 @@ class KGTriplesDataset:
             print(f"[WARN] Feature directory not found: {feature_dir}")
             return
 
-        for mod_name, file_stem in [("text", "text"), ("cxr", "cxr"), ("ecg", "ecg"), ("structured", "structured")]:
+        for mod_name, file_stem in FEATURE_KEY_MAP.items():
             feat_path = feature_dir / f"{file_stem}_features.npy"
             id_path = feature_dir / f"{file_stem}_feature_ids.csv"
 
@@ -396,7 +398,7 @@ class KGTriplesDataset:
                                 kg_idx = self.entity2id[eid_str]
                                 id_map[kg_idx] = features_tensor[row_idx]
 
-            self._modality_features[mod_name] = id_map
+            self._modality_features[file_stem] = id_map
             print(f"  Loaded {len(id_map)} {mod_name} features (dim={features_tensor.shape[1]})")
 
         self._build_modality_padded_tensors()
@@ -592,7 +594,7 @@ class LinkPredictionEvaluator:
         # GPU-resident: entity_id → type_id mapping
         self.entity_type_tensor = torch.zeros(self.num_entities, dtype=torch.long, device=self.device)
         for eid, etype in dataset._entity_type_by_id.items():
-            self.entity_type_tensor[eid] = ENTITY_TYPE_TO_ID.get(etype, 0)
+            self.entity_type_tensor[eid] = ENTITY_TYPE_TO_ID.get(etype, 9)
 
         # GPU-resident: padded type entity pools [num_types, max_pool_size]
         all_pool_sizes = [len(ids) for ids in dataset._entity_ids_by_type.values()] if dataset._entity_ids_by_type else [0]
@@ -601,7 +603,7 @@ class LinkPredictionEvaluator:
         self.type_pool_sizes_tensor = torch.zeros(self.num_types, dtype=torch.long, device=self.device)
         for type_name, ids in dataset._entity_ids_by_type.items():
             if ids:
-                tid = ENTITY_TYPE_TO_ID.get(type_name, 0)
+                tid = ENTITY_TYPE_TO_ID.get(type_name, 9)
                 self.type_entity_pools_padded[tid, :len(ids)] = torch.tensor(ids, dtype=torch.long, device=self.device)
                 self.type_pool_sizes_tensor[tid] = len(ids)
 
@@ -975,7 +977,7 @@ class NegativeSampler:
         # GPU-resident: entity_id → type_id mapping
         self.entity_type_tensor = torch.zeros(self.num_entities, dtype=torch.long, device=self.device)
         for eid, etype in dataset._entity_type_by_id.items():
-            self.entity_type_tensor[eid] = ENTITY_TYPE_TO_ID.get(etype, 0)
+            self.entity_type_tensor[eid] = ENTITY_TYPE_TO_ID.get(etype, 9)
 
         # GPU-resident: padded type entity pools [num_types, max_pool_size]
         all_pool_sizes = [len(ids) for ids in dataset._entity_ids_by_type.values()] if dataset._entity_ids_by_type else [0]
@@ -984,7 +986,7 @@ class NegativeSampler:
         self.type_pool_sizes_tensor = torch.zeros(self.num_types, dtype=torch.long, device=self.device)
         for type_name, ids in dataset._entity_ids_by_type.items():
             if ids:
-                tid = ENTITY_TYPE_TO_ID.get(type_name, 0)
+                tid = ENTITY_TYPE_TO_ID.get(type_name, 9)
                 self.type_entity_pools_padded[tid, :len(ids)] = torch.tensor(ids, dtype=torch.long, device=self.device)
                 self.type_pool_sizes_tensor[tid] = len(ids)
 

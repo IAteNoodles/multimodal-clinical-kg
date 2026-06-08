@@ -1,0 +1,822 @@
+itemid,label,category,fluid
+52029,% Ionized Calcium,Blood Gas,Blood
+52021,Abz,Blood Gas,Blood
+52022,"Albumin, Blood",Blood Gas,Blood
+50801,Alveolar-arterial Gradient,Blood Gas,Blood
+52023,Assist/Control,Blood Gas,Blood
+50802,Base Excess,Blood Gas,Blood
+50803,"Calculated Bicarbonate, Whole Blood",Blood Gas,Blood
+50804,Calculated Total CO2,Blood Gas,Blood
+50805,Carboxyhemoglobin,Blood Gas,Blood
+50806,"Chloride, Whole Blood",Blood Gas,Blood
+52434,"Chloride, Whole Blood",Blood Gas,Blood
+52024,"Creatinine, Whole Blood",Blood Gas,Blood
+52025,Delete,Blood Gas,Blood
+53180,Estimated GFR (CKD- EPI 2021),Blood Gas,Blood
+52026,Estimated GFR (MDRD equation),Blood Gas,Blood
+50808,Free Calcium,Blood Gas,Blood
+50809,Glucose,Blood Gas,Blood
+52027,"Glucose, Whole Blood",Blood Gas,Blood
+52028,Hematocrit,Blood Gas,Blood
+50810,"Hematocrit, Calculated",Blood Gas,Blood
+50811,Hemoglobin,Blood Gas,Blood
+50812,Intubated,Blood Gas,Blood
+50813,Lactate,Blood Gas,Blood
+52442,Lactate,Blood Gas,Blood
+52030,Lithium,Blood Gas,Blood
+50814,Methemoglobin,Blood Gas,Blood
+50815,O2 Flow,Blood Gas,Blood
+52031,Osmolality,Blood Gas,Blood
+50816,Oxygen,Blood Gas,Blood
+50817,Oxygen Saturation,Blood Gas,Blood
+52032,P50 of Hemoglobin,Blood Gas,Blood
+50819,PEEP,Blood Gas,Blood
+50822,"Potassium, Whole Blood",Blood Gas,Blood
+52452,"Potassium, Whole Blood",Blood Gas,Blood
+50823,Required O2,Blood Gas,Blood
+50824,"Sodium, Whole Blood",Blood Gas,Blood
+52455,"Sodium, Whole Blood",Blood Gas,Blood
+52033,Specimen Type,Blood Gas,Blood
+50825,Temperature,Blood Gas,Blood
+50826,Tidal Volume,Blood Gas,Blood
+52034,Total Calcium,Blood Gas,Blood
+52035,Total Calcium,Blood Gas,Blood
+50827,Ventilation Rate,Blood Gas,Blood
+50828,Ventilator,Blood Gas,Blood
+52036,Voided Specimen,Blood Gas,Blood
+52037,WB tCO2,Blood Gas,Blood
+50818,pCO2,Blood Gas,Blood
+50820,pH,Blood Gas,Blood
+50821,pO2,Blood Gas,Blood
+51771,,Chemistry,Blood
+50852,% Hemoglobin A1c,Chemistry,Blood
+53138,(Albumin),Chemistry,Blood
+53128,11-Deoxycorticosterone,Chemistry,Blood
+50853,25-OH Vitamin D,Chemistry,Blood
+53129,3t,Chemistry,Blood
+53130,4t,Chemistry,Blood
+53131,5' Nucleotidase,Chemistry,Blood
+50860,"AFP, Maternal Screen",Chemistry,Blood
+53144,ANCA Titer,Chemistry,Blood
+51564,ARCH-1,Chemistry,Blood
+50854,Absolute A1c,Chemistry,Blood
+50855,Absolute Hemoglobin,Chemistry,Blood
+53157,Absolute Lymphocyte Count,Chemistry,Blood
+53158,Absolute MXD Count,Chemistry,Blood
+53159,Absolute Neutrophil Count,Chemistry,Blood
+50856,Acetaminophen,Chemistry,Blood
+50857,Acetone,Chemistry,Blood
+50858,Acid Phosphatase,Chemistry,Blood
+50859,"Acid Phosphatase, Non-Prostatic",Chemistry,Blood
+53135,"Acid Phosphatase, Prostatic Fraction",Chemistry,Blood
+53136,Adrenocorticotrophic Hormone,Chemistry,Blood
+53137,Afp Mom,Chemistry,Blood
+53084,Alanine Aminotransferase,Chemistry,Blood
+50861,Alanine Aminotransferase (ALT),Chemistry,Blood
+50862,Albumin,Chemistry,Blood
+53085,Albumin,Chemistry,Blood
+53139,Aldosterone,Chemistry,Blood
+53140,Aldosterone,Chemistry,Blood
+53086,Alkaline Phosphatase,Chemistry,Blood
+50863,Alkaline Phosphatase,Chemistry,Blood
+53141,Alpha-1,Chemistry,Blood
+53142,Alpha-1-antitrypsin,Chemistry,Blood
+53143,Alpha-2,Chemistry,Blood
+50864,Alpha-Fetoprotein,Chemistry,Blood
+50865,Amikacin,Chemistry,Blood
+50866,Ammonia,Chemistry,Blood
+53087,Amylase,Chemistry,Blood
+50867,Amylase,Chemistry,Blood
+50868,Anion Gap,Chemistry,Blood
+52500,Anion Gap,Chemistry,Blood
+53146,Anti Hav,Chemistry,Blood
+53147,Anti Hbc,Chemistry,Blood
+53148,Anti Hbe,Chemistry,Blood
+53150,Anti Hbs,Chemistry,Blood
+50869,Anti-DGP (IgA/IgG),Chemistry,Blood
+53145,Anti-GBM Antibody,Chemistry,Blood
+50870,"Anti-Gliadin Antibody, IgA",Chemistry,Blood
+51556,Anti-Microsomal Antibodies,Chemistry,Blood
+51557,Anti-Microsomal Antibody,Chemistry,Blood
+50871,Anti-Mitochondrial Antibody,Chemistry,Blood
+50872,Anti-Neutrophil Cytoplasmic Antibody,Chemistry,Blood
+50873,Anti-Nuclear Antibody,Chemistry,Blood
+50874,"Anti-Nuclear Antibody, Titer",Chemistry,Blood
+50875,Anti-Parietal Cell Antibody,Chemistry,Blood
+51560,Anti-SARS-CoV-2 IgA,Chemistry,Blood
+51562,Anti-Skin Antibody,Chemistry,Blood
+50876,Anti-Smooth Muscle Antibody,Chemistry,Blood
+50877,Anti-Thyroglobulin Antibodies,Chemistry,Blood
+53149,Anti-hbs,Chemistry,Blood
+53151,Anti-la,Chemistry,Blood
+51559,Anti-ro,Chemistry,Blood
+51563,Anti-sm,Chemistry,Blood
+51558,Antirnp,Chemistry,Blood
+51565,Argon,Chemistry,Blood
+53088,Asparate Aminotransferase,Chemistry,Blood
+50878,Asparate Aminotransferase (AST),Chemistry,Blood
+50879,Barbiturate Screen,Chemistry,Blood
+50880,Benzodiazepine Screen,Chemistry,Blood
+51566,Beta,Chemistry,Blood
+51567,Beta Hydroxybutyrate,Chemistry,Blood
+50881,Beta-2 Microglobulin,Chemistry,Blood
+50882,Bicarbonate,Chemistry,Blood
+50883,"Bilirubin, Direct",Chemistry,Blood
+50884,"Bilirubin, Indirect",Chemistry,Blood
+51568,"Bilirubin, Neonatal",Chemistry,Blood
+51569,"Bilirubin, Neonatal, Direct",Chemistry,Blood
+51570,"Bilirubin, Neonatal, Indirect",Chemistry,Blood
+50885,"Bilirubin, Total",Chemistry,Blood
+53089,"Bilirubin, Total",Chemistry,Blood
+51571,Billed,Chemistry,Blood
+51572,Bioavailable Testosterone,Chemistry,Blood
+50886,Blood Culture Hold,Chemistry,Blood
+50887,Blue Top Hold,Chemistry,Blood
+50888,Blue Top Hold Frozen,Chemistry,Blood
+51573,Bromide,Chemistry,Blood
+50889,C-Reactive Protein,Chemistry,Blood
+51574,C1 Inhibitor,Chemistry,Blood
+51575,C1q,Chemistry,Blood
+51576,C2,Chemistry,Blood
+50890,C3,Chemistry,Blood
+50891,C4,Chemistry,Blood
+51577,C5,Chemistry,Blood
+51578,C6,Chemistry,Blood
+51579,CA 19-9,Chemistry,Blood
+50892,CA-125,Chemistry,Blood
+51582,CH50,Chemistry,Blood
+50908,CK-MB Index,Chemistry,Blood
+53160,CMV CT,Chemistry,Blood
+51586,CMV IgG Ab,Chemistry,Blood
+51587,CMV IgG Ab Value,Chemistry,Blood
+51588,CMV IgM Ab,Chemistry,Blood
+51589,CMV IgM Ab Value,Chemistry,Blood
+51590,CMV Interpretation,Chemistry,Blood
+50893,"Calcium, Total",Chemistry,Blood
+51580,Calculated CK-MB,Chemistry,Blood
+50894,Calculated Free Testosterone,Chemistry,Blood
+50895,Calculated TBG,Chemistry,Blood
+50896,Calculated Thyroxine (T4) Index,Chemistry,Blood
+50897,Call,Chemistry,Blood
+50898,Cancer Antigen 27.29,Chemistry,Blood
+50899,Carbamazepine,Chemistry,Blood
+50900,Carcinoembyronic Antigen (CEA),Chemistry,Blood
+51581,Carotene,Chemistry,Blood
+50901,Centromere,Chemistry,Blood
+50902,Chloride,Chemistry,Blood
+52535,Chloride,Chemistry,Blood
+51583,Chol Estr,Chemistry,Blood
+50903,Cholesterol Ratio (Total/HDL),Chemistry,Blood
+50904,"Cholesterol, HDL",Chemistry,Blood
+50905,"Cholesterol, LDL, Calculated",Chemistry,Blood
+50906,"Cholesterol, LDL, Measured",Chemistry,Blood
+50907,"Cholesterol, Total",Chemistry,Blood
+51584,Chylomicrons,Chemistry,Blood
+51585,Clostrid,Chemistry,Blood
+51591,Confirmation,Chemistry,Blood
+51592,Conj Bili,Chemistry,Blood
+51593,Copper,Chemistry,Blood
+50909,Cortisol,Chemistry,Blood
+50910,Creatine Kinase (CK),Chemistry,Blood
+51594,"Creatine Kinase, Isoenzyme BB",Chemistry,Blood
+51595,"Creatine Kinase, Isoenzyme MB",Chemistry,Blood
+51596,"Creatine Kinase, Isoenzyme MM",Chemistry,Blood
+50911,"Creatine Kinase, MB Isoenzyme",Chemistry,Blood
+52546,Creatinine,Chemistry,Blood
+50912,Creatinine,Chemistry,Blood
+52548,Cryoglobulin,Chemistry,Blood
+50913,Cryoglobulin,Chemistry,Blood
+51597,Cvhlc,Chemistry,Blood
+50914,Cyclosporin,Chemistry,Blood
+51598,Cytomegalovirus Viral Load,Chemistry,Blood
+51599,D,Chemistry,Blood
+50915,D-Dimer,Chemistry,Blood
+52551,D-Dimer,Chemistry,Blood
+50916,DHEA-Sulfate,Chemistry,Blood
+51603,Delete,Chemistry,Blood
+51604,Delete,Chemistry,Blood
+51602,Delete,Chemistry,Blood
+51601,Delete,Chemistry,Blood
+51600,Delete,Chemistry,Blood
+51605,Delta/Dlt,Chemistry,Blood
+51606,Digitoxin,Chemistry,Blood
+50917,Digoxin,Chemistry,Blood
+51607,"Dimeric Inhibin A, Maternal Screen",Chemistry,Blood
+51608,DirLst,Chemistry,Blood
+51609,Disopyramide,Chemistry,Blood
+51610,Dlta Bili,Chemistry,Blood
+50918,Double Stranded DNA,Chemistry,Blood
+51611,Down Syndrome Risk,Chemistry,Blood
+51612,Dr. X,Chemistry,Blood
+50919,EDTA Hold,Chemistry,Blood
+51762,EE1,Chemistry,Blood
+51763,EE2,Chemistry,Blood
+51765,EE3,Chemistry,Blood
+51767,EE5,Chemistry,Blood
+51768,EE6,Chemistry,Blood
+51764,EE7,Chemistry,Blood
+51614,Epstein-Barr Virus  EBNA IgG Ab,Chemistry,Blood
+51615,Epstein-Barr Virus EBNA IgG Ab,Chemistry,Blood
+51616,Epstein-Barr Virus IgG Ab Value,Chemistry,Blood
+51617,Epstein-Barr Virus IgM Ab Value,Chemistry,Blood
+51618,Epstein-Barr Virus Interpretation,Chemistry,Blood
+51619,Epstein-Barr Virus VCA IgG Ab,Chemistry,Blood
+51620,Epstein-Barr Virus VCA IgM Ab,Chemistry,Blood
+53161,Estimated GFR (CKD- EPI Refit),Chemistry,Blood
+50920,Estimated GFR (MDRD equation),Chemistry,Blood
+50921,Estradiol,Chemistry,Blood
+50922,Ethanol,Chemistry,Blood
+51621,Ethylene Glycol,Chemistry,Blood
+50923,Fax,Chemistry,Blood
+50924,Ferritin,Chemistry,Blood
+51623,Fibrinogen,Chemistry,Blood
+52562,Folate,Chemistry,Blood
+50925,Folate,Chemistry,Blood
+50926,Follicle Stimulating Hormone,Chemistry,Blood
+51624,Free Calcium,Chemistry,Blood
+51625,Free Kappa,Chemistry,Blood
+51626,Free Kappa/Free Lambda Ratio,Chemistry,Blood
+51627,Free Lambda,Chemistry,Blood
+51628,Fructosamine,Chemistry,Blood
+51629,Fructosamine Plus,Chemistry,Blood
+51630,Gamma,Chemistry,Blood
+53093,Gamma Glutamyltranferase,Chemistry,Blood
+50927,Gamma Glutamyltransferase,Chemistry,Blood
+50928,Gastrin,Chemistry,Blood
+50929,Gentamicin,Chemistry,Blood
+50930,Globulin,Chemistry,Blood
+50931,Glucose,Chemistry,Blood
+52569,Glucose,Chemistry,Blood
+51631,Glycated Hemoglobin,Chemistry,Blood
+50932,Gray Top Hold (plasma),Chemistry,Blood
+50933,Green Top Hold (plasma),Chemistry,Blood
+51632,Growth Hormone,Chemistry,Blood
+50934,H,Chemistry,Blood
+51666,H. pylori IgG Ab,Chemistry,Blood
+51667,H. pylori IgG Ab Value,Chemistry,Blood
+53094,HBV VL CT,Chemistry,Blood
+50936,"HCG, Maternal Screen",Chemistry,Blood
+51636,"HCG, Multiples of Median",Chemistry,Blood
+51637,"HCG, Qualitative",Chemistry,Blood
+53162,HCV CT,Chemistry,Blood
+51653,HIV 1 Ab Confirmation,Chemistry,Blood
+51654,HIV 1 Viral Load,Chemistry,Blood
+51655,HIV 2 Ab Confirmation,Chemistry,Blood
+53152,HIV FINAL,Chemistry,Blood
+53153,HIV Screen,Chemistry,Blood
+53163,HIV Viral Load Ct,Chemistry,Blood
+51657,HPE1,Chemistry,Blood
+51658,HPE2,Chemistry,Blood
+51659,HPE3,Chemistry,Blood
+51660,HPE4,Chemistry,Blood
+51661,HPE5,Chemistry,Blood
+51662,HPE6,Chemistry,Blood
+51663,HPE7,Chemistry,Blood
+51664,HPE8,Chemistry,Blood
+51665,HPE9,Chemistry,Blood
+50935,Haptoglobin,Chemistry,Blood
+51633,Hbeag,Chemistry,Blood
+51634,Hbsag,Chemistry,Blood
+51635,Hbsag,Chemistry,Blood
+51639,Hematocrit,Chemistry,Blood
+51638,Hematocrit,Chemistry,Blood
+51640,Hemoglobin,Chemistry,Blood
+51641,Hemoglobin  A,Chemistry,Blood
+51642,Hemoglobin  A1,Chemistry,Blood
+51643,Hemoglobin  A2,Chemistry,Blood
+51644,Hemoglobin  C,Chemistry,Blood
+51646,Hemoglobin  F,Chemistry,Blood
+51647,Hemoglobin  S,Chemistry,Blood
+51645,"Hemoglobin, Calculated",Chemistry,Blood
+50937,Hepatitis A Virus Antibody,Chemistry,Blood
+50938,Hepatitis A Virus IgM Antibody,Chemistry,Blood
+50939,"Hepatitis B Core Antibody, IgM",Chemistry,Blood
+50940,Hepatitis B Surface Antibody,Chemistry,Blood
+50941,Hepatitis B Surface Antigen,Chemistry,Blood
+51648,Hepatitis B Viral Load,Chemistry,Blood
+50942,Hepatitis B Virus Core Antibody,Chemistry,Blood
+51649,Hepatitis B Virus E Antibody,Chemistry,Blood
+51650,Hepatitis B Virus E Antigen,Chemistry,Blood
+51651,Hepatitis C Viral Load,Chemistry,Blood
+50943,Hepatitis C Virus Antibody,Chemistry,Blood
+51652,High-Sensitivity CRP,Chemistry,Blood
+51656,Hlap,Chemistry,Blood
+50945,Homocysteine,Chemistry,Blood
+51668,Hsap,Chemistry,Blood
+51669,Htlv Ab,Chemistry,Blood
+50946,Human Chorionic Gonadotropin,Chemistry,Blood
+50947,I,Chemistry,Blood
+51671,IFEgel,Chemistry,Blood
+51675,INR(PT),Chemistry,Blood
+51670,Icd9,Chemistry,Blood
+51672,Immune Complexes,Chemistry,Blood
+51673,Immunoelectrophoresis,Chemistry,Blood
+50948,Immunofixation,Chemistry,Blood
+50949,Immunoglobulin A,Chemistry,Blood
+51674,Immunoglobulin E,Chemistry,Blood
+50950,Immunoglobulin G,Chemistry,Blood
+50951,Immunoglobulin M,Chemistry,Blood
+51676,Insulin,Chemistry,Blood
+50952,Iron,Chemistry,Blood
+50953,"Iron Binding Capacity, Total",Chemistry,Blood
+51677,K (GREEN),Chemistry,Blood
+51678,L,Chemistry,Blood
+51680,"LD, Isoenzyme 1",Chemistry,Blood
+51681,"LD, Isoenzyme 2",Chemistry,Blood
+51682,"LD, Isoenzyme 3",Chemistry,Blood
+51683,"LD, Isoenzyme 4",Chemistry,Blood
+51684,"LD, Isoenzyme 5",Chemistry,Blood
+53154,Lactate,Chemistry,Blood
+50954,Lactate Dehydrogenase (LD),Chemistry,Blood
+51679,Lap,Chemistry,Blood
+51685,Lidocaine,Chemistry,Blood
+50955,Light Green Top Hold,Chemistry,Blood
+51686,Lip2,Chemistry,Blood
+50956,Lipase,Chemistry,Blood
+51687,Lipo Electrophoresis,Chemistry,Blood
+50957,Lithium,Chemistry,Blood
+50958,Luteinizing Hormone,Chemistry,Blood
+51688,Lyme C6 Ab,Chemistry,Blood
+51689,Lyme G and M Value,Chemistry,Blood
+53095,Lyme VsIE/PepC10 Antibody,Chemistry,Blood
+53188,Lymphocytes,Chemistry,Blood
+53186,MCH,Chemistry,Blood
+53185,MCHC,Chemistry,Blood
+51691,MCV,Chemistry,Blood
+51770,MDRDgfr,Chemistry,Blood
+53190,MXD%,Chemistry,Blood
+50959,Macro Prolactin,Chemistry,Blood
+50960,Magnesium,Chemistry,Blood
+50961,Methotrexate,Chemistry,Blood
+51692,"Monospot, Rapid Antigen",Chemistry,Blood
+51693,Mumps IgG Ab,Chemistry,Blood
+51694,Mumps IgG Ab Value,Chemistry,Blood
+51695,Myoglobin,Chemistry,Blood
+50962,N-Acetylprocainamide (NAPA),Chemistry,Blood
+50963,NTproBNP,Chemistry,Blood
+51696,Neural Tube Defect Risk,Chemistry,Blood
+53164,Neutrophils,Chemistry,Blood
+51698,No MD,Chemistry,Blood
+51699,Not Done,Chemistry,Blood
+51700,Np-fx,Chemistry,Blood
+51701,"Osmolality, Calculated",Chemistry,Blood
+50964,"Osmolality, Measured",Chemistry,Blood
+51772,PAN3,Chemistry,Blood
+51703,PEPgel,Chemistry,Blood
+50965,Parathyroid Hormone,Chemistry,Blood
+51702,Park,Chemistry,Blood
+50966,Phenobarbital,Chemistry,Blood
+50967,Phenytoin,Chemistry,Blood
+50968,"Phenytoin, Free",Chemistry,Blood
+50969,"Phenytoin, Percent Free",Chemistry,Blood
+50970,Phosphate,Chemistry,Blood
+53189,Platelet Count,Chemistry,Blood
+52610,Potassium,Chemistry,Blood
+50971,Potassium,Chemistry,Blood
+51705,Primidone,Chemistry,Blood
+51706,Problem Specimen,Chemistry,Blood
+50972,Procainamide,Chemistry,Blood
+51707,Progesterone,Chemistry,Blood
+50973,Prolactin,Chemistry,Blood
+50974,Prostate Specific Antigen,Chemistry,Blood
+50975,Protein Electrophoresis,Chemistry,Blood
+50976,"Protein, Total",Chemistry,Blood
+53096,"Protein, Total",Chemistry,Blood
+51708,Qnthbsab,Chemistry,Blood
+51709,Quantitative RPR Test,Chemistry,Blood
+50977,Quinidine,Chemistry,Blood
+53165,RDW-CV,Chemistry,Blood
+53166,RDW-SD,Chemistry,Blood
+51773,RFXFRKL,Chemistry,Blood
+51774,RFXHCV,Chemistry,Blood
+51722,RFXLDLM,Chemistry,Blood
+51769,RUBIgGV,Chemistry,Blood
+50978,Rapamycin,Chemistry,Blood
+51710,Rapid Plasma Reagin Test,Chemistry,Blood
+50979,Red Top Hold,Chemistry,Blood
+51712,Referred,Chemistry,Blood
+51713,Reflex Confirmatory Hepatitis C Viral Load,Chemistry,Blood
+51714,Reflex HIV Confirmation,Chemistry,Blood
+53167,Reflex RPR,Chemistry,Blood
+51715,Renin,Chemistry,Blood
+51717,Reserved,Chemistry,Blood
+51718,Reserved1,Chemistry,Blood
+51719,Reserved3,Chemistry,Blood
+51720,Reserved4,Chemistry,Blood
+51721,Reverse T3,Chemistry,Blood
+50980,Rheumatoid Factor,Chemistry,Blood
+51723,Rubella,Chemistry,Blood
+51724,Rubella IgG Ab,Chemistry,Blood
+51725,Rubeola IgG Ab,Chemistry,Blood
+51726,Rubeola IgG Ab Value,Chemistry,Blood
+51732,STX1,Chemistry,Blood
+51733,STX2,Chemistry,Blood
+51734,STX3,Chemistry,Blood
+51735,STX4,Chemistry,Blood
+51736,STX5,Chemistry,Blood
+51737,STX6,Chemistry,Blood
+50981,Salicylate,Chemistry,Blood
+51727,Send Out,Chemistry,Blood
+51728,Serum B12,Chemistry,Blood
+51729,Serum B12,Chemistry,Blood
+51730,Serum Folate,Chemistry,Blood
+50982,Sex Hormone Binding Globulin,Chemistry,Blood
+51731,Single Stranded DNA,Chemistry,Blood
+50983,Sodium,Chemistry,Blood
+52623,Sodium,Chemistry,Blood
+50984,Stat,Chemistry,Blood
+50985,Study Tubes,Chemistry,Blood
+50988,Testosterone,Chemistry,Blood
+50989,"Testosterone, Free",Chemistry,Blood
+50990,Theophylline,Chemistry,Blood
+50991,Thyroglobulin,Chemistry,Blood
+51738,Thyroid Binding Globulin,Chemistry,Blood
+50992,Thyroid Peroxidase Antibodies,Chemistry,Blood
+50993,Thyroid Stimulating Hormone,Chemistry,Blood
+50994,Thyroxine (T4),Chemistry,Blood
+50995,"Thyroxine (T4), Free",Chemistry,Blood
+50996,"Tissue Transglutaminase Ab, IgA",Chemistry,Blood
+50997,Tobramycin,Chemistry,Blood
+51739,Total CO2,Chemistry,Blood
+51740,Toxic Screen,Chemistry,Blood
+51741,Toxoplasma IgG Ab,Chemistry,Blood
+51742,Toxoplasma IgG Ab Value,Chemistry,Blood
+51743,Toxoplasma IgM Ab,Chemistry,Blood
+51744,Toxoplasma IgM Ab Value,Chemistry,Blood
+51745,Toxoplasma Interpretation,Chemistry,Blood
+50998,Transferrin,Chemistry,Blood
+51746,Transferrin Saturation,Chemistry,Blood
+51748,Treponema pallidum (Syphilis) Ab,Chemistry,Blood
+51749,Treponema pallidum (syphilis) value,Chemistry,Blood
+51747,Treponemal Antibody Test,Chemistry,Blood
+50999,Tricyclic Antidepressant Screen,Chemistry,Blood
+51000,Triglycerides,Chemistry,Blood
+51001,Triiodothyronine (T3),Chemistry,Blood
+51002,Troponin I,Chemistry,Blood
+52642,Troponin I,Chemistry,Blood
+51003,Troponin T,Chemistry,Blood
+51004,"UE3, Maternal Screen",Chemistry,Blood
+51750,"UE3, Multiples of Median",Chemistry,Blood
+51751,Uncon Bil,Chemistry,Blood
+51005,Uptake Ratio,Chemistry,Blood
+52647,Urea Nitrogen,Chemistry,Blood
+51006,Urea Nitrogen,Chemistry,Blood
+51007,Uric Acid,Chemistry,Blood
+51753,VZV IgG Ab,Chemistry,Blood
+51754,VZV IgG Ab Value,Chemistry,Blood
+51008,Valproic Acid,Chemistry,Blood
+51009,Vancomycin,Chemistry,Blood
+51010,Vitamin B12,Chemistry,Blood
+51752,Voided Specimen,Chemistry,Blood
+51755,White Blood Cells,Chemistry,Blood
+51756,White Blood Cells,Chemistry,Blood
+51757,Xxx,Chemistry,Blood
+51758,Xylose,Chemistry,Blood
+51759,Z,Chemistry,Blood
+51760,Z,Chemistry,Blood
+51761,Zinc,Chemistry,Blood
+51613,eAG,Chemistry,Blood
+50986,tacroFK,Chemistry,Blood
+52170, Rbc,Hematology,Blood
+53182,% Parasitemia,Hematology,Blood
+52068,24 Hr,Hematology,Blood
+51135,ADP,Hematology,Blood
+51141,APT Test,Hematology,Blood
+52079,ASA Tol,Hematology,Blood
+52081,ASD & NA-F,Hematology,Blood
+52215,ATLFlg,Hematology,Blood
+52214,AbnLymp,Hematology,Blood
+52069,Absolute Basophil Count,Hematology,Blood
+52070,Absolute CD19 Count,Hematology,Blood
+52071,Absolute CD20 Count,Hematology,Blood
+51130,Absolute CD3 Count,Hematology,Blood
+51131,Absolute CD4 Count,Hematology,Blood
+52072,Absolute CD56 Count,Hematology,Blood
+51132,Absolute CD8 Count,Hematology,Blood
+52073,Absolute Eosinophil Count,Hematology,Blood
+52769,Absolute Lymphocyte Count,Hematology,Blood
+51133,Absolute Lymphocyte Count,Hematology,Blood
+52074,Absolute Monocyte Count,Hematology,Blood
+52075,Absolute Neutrophil Count,Hematology,Blood
+51134,Acanthocytes,Hematology,Blood
+52076,Acid Phosphatase Stain,Hematology,Blood
+52077,Acidserum,Hematology,Blood
+51136,Alpha Antiplasmin,Hematology,Blood
+51137,Anisocytosis,Hematology,Blood
+51138,Anticardiolipin Antibody IgG,Hematology,Blood
+51139,Anticardiolipin Antibody IgM,Hematology,Blood
+51140,Antithrombin,Hematology,Blood
+52078,Antithrombin III,Hematology,Blood
+51142,Arachadonic Acid,Hematology,Blood
+52080,Asd,Hematology,Blood
+52082,Aspirin Reactivity,Hematology,Blood
+51143,Atypical Lymphocytes,Hematology,Blood
+52083,Autohem+g,Hematology,Blood
+52084,Autohem-g,Hematology,Blood
+51144,Bands,Hematology,Blood
+52208,BasoFlg,Hematology,Blood
+51145,Basophilic Stippling,Hematology,Blood
+51146,Basophils,Hematology,Blood
+51147,Bite Cells,Hematology,Blood
+52217,Bl/AbLy,Hematology,Blood
+52216,BlasFlg,Hematology,Blood
+51148,Blasts,Hematology,Blood
+52086,Bleed Tm,Hematology,Blood
+52085,Bleed Tm,Hematology,Blood
+51149,Bleeding Time,Hematology,Blood
+52786,Bleeding Time,Hematology,Blood
+51150,Blood Parasite Smear,Hematology,Blood
+53181,CBC Only,Hematology,Blood
+52088,CD 1a,Hematology,Blood
+51152,CD10,Hematology,Blood
+51153,CD103,Hematology,Blood
+51154,CD117,Hematology,Blood
+51155,CD11c,Hematology,Blood
+51156,CD13,Hematology,Blood
+51157,CD138,Hematology,Blood
+51158,CD14,Hematology,Blood
+51159,CD15,Hematology,Blood
+52087,CD15/56,Hematology,Blood
+51161,CD16,Hematology,Blood
+51162,CD16/56 Absolute Count,Hematology,Blood
+51163,CD16/56%,Hematology,Blood
+51164,CD19,Hematology,Blood
+51165,CD19 %,Hematology,Blood
+51166,CD19 Absolute Count,Hematology,Blood
+51167,CD2,Hematology,Blood
+51168,CD20,Hematology,Blood
+51169,CD20 %,Hematology,Blood
+51170,CD20 Absolute Count,Hematology,Blood
+51171,CD22,Hematology,Blood
+51172,CD23,Hematology,Blood
+51173,CD25,Hematology,Blood
+51174,CD3 %,Hematology,Blood
+51175,CD3 Absolute Count,Hematology,Blood
+51176,"CD3 Cells, Percent",Hematology,Blood
+52089,CD30,Hematology,Blood
+51177,CD33,Hematology,Blood
+51178,CD34,Hematology,Blood
+51179,CD38,Hematology,Blood
+51180,"CD4 Cells, Percent",Hematology,Blood
+51181,CD4/CD8 Ratio,Hematology,Blood
+51182,CD41,Hematology,Blood
+52090,CD42,Hematology,Blood
+51183,CD45,Hematology,Blood
+51184,CD5,Hematology,Blood
+51185,CD5 %,Hematology,Blood
+51186,CD5 Absolute Count,Hematology,Blood
+52091,CD52,Hematology,Blood
+51187,CD55,Hematology,Blood
+51188,CD56,Hematology,Blood
+52092,CD56 %,Hematology,Blood
+52093,CD56 Absolute Count,Hematology,Blood
+51189,CD57,Hematology,Blood
+51190,CD59,Hematology,Blood
+52094,CD61,Hematology,Blood
+52095,CD62,Hematology,Blood
+51191,CD64,Hematology,Blood
+51192,CD7,Hematology,Blood
+51193,CD71,Hematology,Blood
+51194,"CD8 Cells, Percent",Hematology,Blood
+52096,Chloroacetate,Hematology,Blood
+52097,Circ Ab,Hematology,Blood
+52098,Clot Lysis,Hematology,Blood
+52099,Clot Retraction,Hematology,Blood
+52100,Clot Time,Hematology,Blood
+51195,Collagen,Hematology,Blood
+52101,Cr,Hematology,Blood
+52102,Crenated Cells,Hematology,Blood
+52103,Cross Imm,Hematology,Blood
+52104,Cryoglob,Hematology,Blood
+51196,D-Dimer,Hematology,Blood
+52110,DSmear,Hematology,Blood
+52105,Direct Antiplatelet Antibodies,Hematology,Blood
+52106,Donath-l,Hematology,Blood
+52111,Echinocytes,Hematology,Blood
+51197,Elliptocytes,Hematology,Blood
+51198,Envelope Cells,Hematology,Blood
+52209,EosFlg,Hematology,Blood
+51199,Eosinophil Count,Hematology,Blood
+51200,Eosinophils,Hematology,Blood
+51201,Epinepherine,Hematology,Blood
+52198,ErytFlg,Hematology,Blood
+52112,Euglobulin Lysis,Hematology,Blood
+51215,FMC-7,Hematology,Blood
+52838,Factor II,Hematology,Blood
+51202,Factor II,Hematology,Blood
+52840,Factor IX,Hematology,Blood
+51203,Factor IX,Hematology,Blood
+52113,Factor IX Inhibitor,Hematology,Blood
+51204,Factor V,Hematology,Blood
+52842,Factor V,Hematology,Blood
+52844,Factor VII,Hematology,Blood
+51205,Factor VII,Hematology,Blood
+52846,Factor VIII,Hematology,Blood
+51206,Factor VIII,Hematology,Blood
+52114,Factor VIII Antigen,Hematology,Blood
+51207,Factor VIII Inhibitor,Hematology,Blood
+52849,Factor X,Hematology,Blood
+51208,Factor X,Hematology,Blood
+51209,Factor XI,Hematology,Blood
+52851,Factor XI,Hematology,Blood
+52853,Factor XII,Hematology,Blood
+51210,Factor XII,Hematology,Blood
+52855,Factor XIII,Hematology,Blood
+51211,Factor XIII,Hematology,Blood
+51212,Fetal Hemoglobin,Hematology,Blood
+52858,Fibrin Degradation Products,Hematology,Blood
+51213,Fibrin Degradation Products,Hematology,Blood
+52115,Fibrinoge,Hematology,Blood
+52116,Fibrinogen,Hematology,Blood
+51214,"Fibrinogen, Functional",Hematology,Blood
+52117,"Fibrinogen, Immunologic",Hematology,Blood
+52119,Fitzgerld,Hematology,Blood
+52120,Fitzgerld,Hematology,Blood
+52121,Fletcher,Hematology,Blood
+52199,FragFlg,Hematology,Blood
+51216,Fragmented Cells,Hematology,Blood
+52122,Fsp,Hematology,Blood
+52123,"G6PD, Qualitative",Hematology,Blood
+52124,G6pd Spec,Hematology,Blood
+52125,Glutathione,Hematology,Blood
+51217,Glyco A,Hematology,Blood
+51218,Granulocyte Count,Hematology,Blood
+51219,H/O Smear,Hematology,Blood
+52131,HIT-Ab Interpreted Result,Hematology,Blood
+52132,HIT-Ab Numerical Result,Hematology,Blood
+51230,HLA-DR,Hematology,Blood
+52126,Heinz Aph,Hematology,Blood
+51220,Heinz Body Prep,Hematology,Blood
+52127,Helmet Cells,Hematology,Blood
+51221,Hematocrit,Hematology,Blood
+51222,Hemoglobin,Hematology,Blood
+51223,Hemoglobin A2,Hematology,Blood
+51224,Hemoglobin C,Hematology,Blood
+51225,Hemoglobin F,Hematology,Blood
+52128,Hemoglobin H Inclusion,Hematology,Blood
+52129,Hemoglobin Other,Hematology,Blood
+51226,Hemogloblin A,Hematology,Blood
+51227,Hemogloblin S,Hematology,Blood
+51228,Heparin,Hematology,Blood
+51229,"Heparin, LMW",Hematology,Blood
+52130,Histiocytes,Hematology,Blood
+52133,Hmwk,Hematology,Blood
+51231,Howell-Jolly Bodies,Hematology,Blood
+51232,Hypersegmented Neutrophils,Hematology,Blood
+51233,Hypochromia,Hematology,Blood
+52134,IG,Hematology,Blood
+52218,IG Flg,Hematology,Blood
+51237,INR(PT),Hematology,Blood
+52135,Immature Granulocytes,Hematology,Blood
+51234,Immunophenotyping,Hematology,Blood
+52137,Inh Scr,Hematology,Blood
+52136,Inhibitor,Hematology,Blood
+51235,Inhibitor Screen,Hematology,Blood
+51236,Inpatient Hematology/Oncology Smear,Hematology,Blood
+51238,Kappa,Hematology,Blood
+52138,Kct,Hematology,Blood
+52139,LE Prep,Hematology,Blood
+52140,LS,Hematology,Blood
+51242,LUC,Hematology,Blood
+51239,Lambda,Hematology,Blood
+51240,Large Platelets,Hematology,Blood
+52210,LeftShf,Hematology,Blood
+51241,Leukocyte Alkaline Phosphatase,Hematology,Blood
+52889,Lupus Anticoagulant,Hematology,Blood
+51243,Lupus Anticoagulant,Hematology,Blood
+52211,LymFlg,Hematology,Blood
+51244,Lymphocytes,Hematology,Blood
+51245,"Lymphocytes, Percent",Hematology,Blood
+51248,MCH,Hematology,Blood
+51249,MCHC,Hematology,Blood
+51250,MCV,Hematology,Blood
+51247,MacroOvalocytes,Hematology,Blood
+51246,Macrocytes,Hematology,Blood
+52141,Malaria Smear,Hematology,Blood
+52142,Mean Platelet Volume,Hematology,Blood
+51251,Metamyelocytes,Hematology,Blood
+52143,Methemalb,Hematology,Blood
+52144,Methemoglobin,Hematology,Blood
+51252,Microcytes,Hematology,Blood
+52145,Mono Spot Test,Hematology,Blood
+52212,MonoFlg,Hematology,Blood
+51253,Monocyte Count,Hematology,Blood
+51254,Monocytes,Hematology,Blood
+51255,Myelocytes,Hematology,Blood
+52147,NEUTX,Hematology,Blood
+52148,NEUTY,Hematology,Blood
+52149,NFletcher,Hematology,Blood
+52151,NRBC,Hematology,Blood
+52213,NRBCFlg,Hematology,Blood
+52146,Naphtol Acetate Stain,Hematology,Blood
+51256,Neutrophils,Hematology,Blood
+52150,Non-Specific Esterase,Hematology,Blood
+51257,Nucleated Red Cells,Hematology,Blood
+51258,Osmotic Fragility,Hematology,Blood
+52152,"Osmotic Fragility, Incubated",Hematology,Blood
+51259,Other Cells,Hematology,Blood
+52153,Other Inhibitor,Hematology,Blood
+51260,Ovalocytes,Hematology,Blood
+52154,P2Y12 Reaction Units,Hematology,Blood
+52921,PT,Hematology,Blood
+51274,PT,Hematology,Blood
+52163,PT Control,Hematology,Blood
+52164,PT Mean,Hematology,Blood
+52923,PTT,Hematology,Blood
+51275,PTT,Hematology,Blood
+52165,PTT Control,Hematology,Blood
+52167,PTT mea,Hematology,Blood
+52166,PTT-LA,Hematology,Blood
+51261,Pappenheimer Bodies,Hematology,Blood
+51262,Pencil Cells,Hematology,Blood
+52155,Periodic Acid Schiff Stain,Hematology,Blood
+52156,Peroxidase Staining,Hematology,Blood
+51263,Plasma Cells,Hematology,Blood
+52157,Plasma Hemoglobin,Hematology,Blood
+52158,Plasminogen,Hematology,Blood
+52159,Platelet Aggregation,Hematology,Blood
+51264,Platelet Clumps,Hematology,Blood
+51265,Platelet Count,Hematology,Blood
+51266,Platelet Smear,Hematology,Blood
+52202,PltClmp,Hematology,Blood
+52200,PltDist,Hematology,Blood
+52201,PltScat,Hematology,Blood
+51267,Poikilocytosis,Hematology,Blood
+51268,Polychromasia,Hematology,Blood
+52160,Prekallekrein,Hematology,Blood
+52161,Problem Specimen,Hematology,Blood
+51269,Promyelocytes,Hematology,Blood
+51270,"Protein C, Antigen",Hematology,Blood
+51271,"Protein C, Functional",Hematology,Blood
+52162,Protein S,Hematology,Blood
+51272,"Protein S, Antigen",Hematology,Blood
+51273,"Protein S, Functional",Hematology,Blood
+52168,Pyruvate Kinase,Hematology,Blood
+52169,QFib,Hematology,Blood
+51276,Quantitative G6PD,Hematology,Blood
+52171,RBC Morphology,Hematology,Blood
+52203,RBCAgg,Hematology,Blood
+52204,RBCDist,Hematology,Blood
+51277,RDW,Hematology,Blood
+52172,RDW-SD,Hematology,Blood
+52173,Red Blood Cell Enzyme,Hematology,Blood
+51278,Red Blood Cell Fragments,Hematology,Blood
+51279,Red Blood Cells,Hematology,Blood
+52929,Reptilase Time,Hematology,Blood
+51280,Reptilase Time,Hematology,Blood
+51281,Reptilase Time Control,Hematology,Blood
+52174,"Reptilase Time, Control",Hematology,Blood
+52206,RetFlg,Hematology,Blood
+52205,RetScat,Hematology,Blood
+51282,"Reticulocyte Count, Absolute",Hematology,Blood
+51283,"Reticulocyte Count, Automated",Hematology,Blood
+52934,"Reticulocyte Count, Manual",Hematology,Blood
+51284,"Reticulocyte Count, Manual",Hematology,Blood
+51285,"Reticulocyte, Cellular Hemoglobin",Hematology,Blood
+51286,Ristocetin,Hematology,Blood
+52175,Ristocetin Response,Hematology,Blood
+52176,Rouleaux,Hematology,Blood
+52177,SCT - Confirmation,Hematology,Blood
+52178,SCT - Normalized Ratio,Hematology,Blood
+52179,SCT - Screen,Hematology,Blood
+52180,STA-CLOT,Hematology,Blood
+51287,Schistocytes,Hematology,Blood
+51288,Sedimentation Rate,Hematology,Blood
+51289,Serum Viscosity,Hematology,Blood
+51290,Sickle Cell Preparation,Hematology,Blood
+51291,Sickle Cells,Hematology,Blood
+51292,Spherocytes,Hematology,Blood
+52181,Stomatocyte,Hematology,Blood
+52182,Sudan Black Staining,Hematology,Blood
+51293,Sugar Water Test,Hematology,Blood
+52183,Sulf Hgb,Hematology,Blood
+52184,TCR Alpha-Beta,Hematology,Blood
+52185,TCR Gamma-Delta,Hematology,Blood
+51294,Target Cells,Hematology,Blood
+51295,TdT,Hematology,Blood
+51296,Teardrop Cells,Hematology,Blood
+52186,Test,Hematology,Blood
+52948,Thrombin,Hematology,Blood
+51297,Thrombin,Hematology,Blood
+52187,Thrombin Time,Hematology,Blood
+52189,Thrombin Time Control,Hematology,Blood
+52188,Thrombin Time Control,Hematology,Blood
+52190,Tissue Thromboplastin Inhibitor,Hematology,Blood
+52191,Tr- Acid,Hematology,Blood
+52192,Trap Stain,Hematology,Blood
+52207,TurbHbI,Hematology,Blood
+52194,VIII-CIE,Hematology,Blood
+52193,Viii Ag,Hematology,Blood
+52195,Voided Specimen,Hematology,Blood
+51298,Von Willebrand Factor Activity,Hematology,Blood
+51299,Von Willebrand Factor Antigen,Hematology,Blood
+52197,WAM MANUAL DIFF 2,Hematology,Blood
+52196,WAM Manual Diff,Hematology,Blood
+51300,WBC Count,Hematology,Blood
+52219,WBCScat,Hematology,Blood
+51301,White Blood Cells,Hematology,Blood
+51302,Young Cells,Hematology,Blood
+52107,dRVVT - Confirmation,Hematology,Blood
+52108,dRVVT - Normalized Ratio,Hematology,Blood
+52109,dRVVT - Screen,Hematology,Blood
+52220,wbcp,Hematology,Blood
