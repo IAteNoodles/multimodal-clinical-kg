@@ -389,9 +389,12 @@ class KGTriplesDataset:
                 header = next(reader, None)
                 for row_idx, row in enumerate(reader):
                     if len(row) >= 1:
-                        eid = int(row[0])
+                        orig_eid = int(row[0])
                         if row_idx < features_tensor.shape[0]:
-                            id_map[eid] = features_tensor[row_idx]
+                            eid_str = str(orig_eid)
+                            if eid_str in self.entity2id:
+                                kg_idx = self.entity2id[eid_str]
+                                id_map[kg_idx] = features_tensor[row_idx]
 
             self._modality_features[mod_name] = id_map
             print(f"  Loaded {len(id_map)} {mod_name} features (dim={features_tensor.shape[1]})")
