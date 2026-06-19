@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import copy
+import os
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+os.environ.setdefault(
+    "PYTORCH_CUDA_ALLOC_CONF",
+    "garbage_collection_threshold:0.8,max_split_size_mb:256",
+)
 
 import argparse
 import json
@@ -35,6 +40,8 @@ class VRAMExceeded(Exception):
 from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 
 from simulation.kg.dataset import (
+    ENTITY_TYPE_TO_ID,
+    MODALITY_TO_ID,
     KGTriplesDataset,
     MultimodalKGTriplesDataset,
     LinkPredictionEvaluator,
@@ -115,6 +122,49 @@ def _nvidia_smi_memory_gb(device) -> tuple[Optional[float], Optional[float], Opt
         return total_gb, used_gb, shared_gb
     except Exception:
         return None, None, None
+
+
+def _enforce_vram_ceiling(args: argparse.Namespace, device) -> float:
+    """Hard-cap PyTorch's CUDA allocator so an over-budget allocation raises a
+    clean OOM (which the existing retry loop handles) instead of letting the
+    Windows WDDM driver silently spill into *shared* GPU memory.
+
+    Why this is needed: torch.cuda.memory_allocated() does NOT include the CUDA
+    context, cuDNN/cuBLAS workspaces, or allocator fragmentation -- but Task
+    Manager and the driver count all of it. On a 6 GB card those extras are
+    ~0.7-1.0 GB, so a budget that targets ~5.3 GB of *allocated* memory
+    overshoots the physical 6 GB and pages the overflow (~0.4 GB) into shared
+    memory. set_per_process_memory_fraction caps the allocator's *reserved*
+    bytes below that spill line, keeping every commitment inside dedicated VRAM.
+
+    Returns the cap in GB (0.0 if not applicable / failed).
+    """
+    if str(getattr(device, 'type', device)) == 'cpu':
+        return 0.0
+    try:
+        idx = _cuda_device_index(device)
+        total_gb = torch.cuda.get_device_properties(idx).total_memory / 1e9
+        # Hold back room for the CUDA context + workspaces + fragmentation that
+        # the driver counts on top of torch's allocated bytes.
+        context_reserve_gb = getattr(args, 'cuda_context_reserve_gb', 1.0)
+        cap_gb = total_gb - context_reserve_gb
+        configured = getattr(args, 'max_vram_gb', 0.0)
+        if configured and configured > 0:
+            cap_gb = min(cap_gb, configured)
+        cap_gb = max(0.5, cap_gb)
+        frac = max(0.05, min(0.95, cap_gb / total_gb))
+        torch.cuda.set_per_process_memory_fraction(frac, idx)
+        torch.cuda.empty_cache()
+        print(
+            f"  [VRAM-CEILING] device total={total_gb:.2f}GB, context reserve="
+            f"{context_reserve_gb:.2f}GB -> torch allocator capped at "
+            f"{cap_gb:.2f}GB ({frac*100:.0f}%). Over-budget allocations now OOM "
+            f"(and auto-retry smaller) instead of spilling to shared memory."
+        )
+        return cap_gb
+    except Exception as exc:
+        print(f"  [VRAM-CEILING] could not set per-process memory fraction: {exc}")
+        return 0.0
 
 
 class EMA:
@@ -269,6 +319,9 @@ def train_model(
     is_mm_cascade = _is_multimodal_cascade(model)
     if device.type == 'cuda':
         torch.cuda.empty_cache()
+        # Cap the allocator BEFORE calibration so the probe steps OOM-and-shrink
+        # instead of spilling into shared GPU memory.
+        _enforce_vram_ceiling(args, device)
         torch.backends.cudnn.benchmark = True
 
     high_lr_params = []
@@ -377,7 +430,12 @@ def train_model(
     if device.type == 'cuda':
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
-        cal = _calibrate_vram(model, dataset, neg_sampler, loss_fn, optimizer, scaler, args, device)
+        if getattr(args, 'skip_calibrate', False):
+            print("  [CALIBRATE] Skipped by --skip-calibrate; using explicit bs, neg, ga")
+            cal = {'batch_size': args.batch_size, 'num_negatives': args.num_negatives,
+                   'grad_accum_steps': args.grad_accum_steps, 'eval_batch_size': args.eval_batch_size}
+        else:
+            cal = _calibrate_vram(model, dataset, neg_sampler, loss_fn, optimizer, scaler, args, device)
         if cal['batch_size'] != args.batch_size or cal['num_negatives'] != args.num_negatives:
             print(f"  [CALIBRATE] Applying: bs {args.batch_size}->{cal['batch_size']} neg {args.num_negatives}->{cal['num_negatives']} ga {args.grad_accum_steps}->{cal['grad_accum_steps']}")
             args.batch_size = cal['batch_size']
@@ -404,6 +462,10 @@ def train_model(
             print(f"  [CALIBRATE] DataLoader rebuilt: bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum_steps}")
         else:
             print(f"  [CALIBRATE] Current config optimal: bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum_steps}")
+        # Fully release the large transient segments the calibration probes
+        # created, so they do not linger as reserved/oversize blocks and inflate
+        # driver-visible VRAM during the real training loop.
+        gc.collect()
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
     for epoch in range(start_epoch, args.epochs + 1):
@@ -792,12 +854,12 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Modul
             matched_params = compute_model_params('complex', num_ents, num_rels, embed_dim)
             print(f"  Param-matched ComplEx: embed_dim={embed_dim}, params={matched_params:,} (CASCADE ref={cascade_params:,})")
         return ComplExModel(num_ents, num_rels, embed_dim, dropout=args.dropout)
-    elif args.model == 'cascade':
+    el    if args.model == 'cascade':
         ablation = getattr(args, 'ablation', None)
         return CASCADEKGModel(
             num_ents, num_rels, args.embed_dim,
-            num_entity_types=5,
-            num_modalities=4,
+            num_entity_types=len(ENTITY_TYPE_TO_ID),
+            num_modalities=len(MODALITY_TO_ID),
             ablation=ablation,
             dropout=args.dropout,
         )
@@ -805,7 +867,7 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Modul
         modalities = MODALITY_SET_MAP.get(args.modalities, {"text"})
         return MultimodalComplExModel(
             num_ents, num_rels, args.embed_dim,
-            num_modalities=4,
+            num_modalities=len(MODALITY_TO_ID),
             synergy_dim=64,
             num_heads=4,
             dropout=args.dropout,
@@ -818,8 +880,8 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Modul
         ablation = getattr(args, 'ablation', None)
         return MultimodalCASCADEModel(
             num_ents, num_rels, args.embed_dim,
-            num_entity_types=5,
-            num_modalities=4,
+            num_entity_types=len(ENTITY_TYPE_TO_ID),
+            num_modalities=len(MODALITY_TO_ID),
             synergy_dim=64,
             num_heads=4,
             dropout=args.dropout,
@@ -1004,7 +1066,11 @@ def _calibrate_vram(
         return {'batch_size': new_bs, 'num_negatives': new_neg, 'grad_accum_steps': new_ga, 'eval_batch_size': min(new_bs, 64)}
 
     lo_bs = 64
-    hi_bs = 2048
+    # Cap the probe ceiling near the auto-tuned batch size. Probing all the way
+    # to 2048 on a 6 GB card creates huge transient + "oversize" allocator
+    # segments that fragment memory and inflate driver-visible VRAM long after
+    # the probe tensors are freed -- a primary cause of the shared-memory spill.
+    hi_bs = min(1024, max(lo_bs + 1, getattr(args, 'batch_size', 256) * 2))
     best_bs = lo_bs
     best_peak = peak_small
     max_iters = 6
@@ -1222,6 +1288,10 @@ def main() -> None:
                         help='Run all models sequentially and produce a comparison JSON')
     parser.add_argument('--patience', type=int, default=3,
                         help='Early stopping patience on val MRR')
+    parser.add_argument('--no-ema', action='store_true', default=False,
+                        help='Disable Exponential Moving Average of model parameters')
+    parser.add_argument('--min-system-ram-gb', type=float, default=0.5,
+                        help='Minimum free system RAM in GB before aborting (0 disables)')
     parser.add_argument('--ablation', type=str, default=None,
                         choices=[None, 'no_pid', 'no_modality', 'no_type'],
                         help='CASCADE ablation variant')
@@ -1233,6 +1303,8 @@ def main() -> None:
                         help='Confidence interval level')
     parser.add_argument('--tune', action='store_true',
                         help='Run hyperparameter tuning with random search')
+    parser.add_argument('--skip-calibrate', action='store_true', default=False,
+                        help='Skip VRAM calibration probes and auto-tune; use explicit --batch-size/--num-negatives/--grad-accum-steps as-is')
     parser.add_argument('--tune-trials', type=int, default=20,
                         help='Number of hyperparameter trials')
     parser.add_argument('--modalities', type=str, default='text',
@@ -1252,10 +1324,26 @@ def main() -> None:
                         help='Fraction of training after which SWA starts (default 0.75)')
     parser.add_argument('--swa-lr', type=float, default=0.05,
                         help='Learning rate for SWA (default 0.05 * base lr)')
+    parser.add_argument('--max-vram-gb', type=float, default=5.0,
+                        help='Strict CUDA memory budget in GB for auto-tune/calibration/runtime guards (0 disables). '
+                             'Lowered from 5.8 -> 5.0: the old value targeted torch "allocated" bytes and ignored the '
+                             'CUDA context + fragmentation the driver counts, so the card overshot 6 GB and spilled.')
+    parser.add_argument('--cuda-context-reserve-gb', type=float, default=1.0,
+                        help='VRAM (GB) held back for the CUDA context + cuDNN/cuBLAS workspaces + allocator '
+                             'fragmentation that the Windows driver counts but torch.cuda.memory_allocated() does not. '
+                             'The allocator is hard-capped at min(max_vram_gb, total - this). Raise to 1.3-1.5 if you '
+                             'still see ANY shared GPU memory in Task Manager.')
+    parser.add_argument('--shared-gpu-limit-gb', type=float, default=0.1,
+                        help='Abort/retry if NVIDIA-reported shared GPU memory exceeds this many GB (-1 disables)')
     args = parser.parse_args()
 
     if args.no_cuda or not torch.cuda.is_available():
         args.device = 'cpu'
+
+    if args.device == 'cuda':
+        # Set the hard allocator ceiling once up front; it persists for the
+        # whole process and is respected by calibration and every retry.
+        _enforce_vram_ceiling(args, torch.device(args.device))
 
     set_seed(args.seed)
 
@@ -1366,39 +1454,44 @@ def main() -> None:
         args.num_negatives = orig_num_negatives
         args.grad_accum_steps = orig_grad_accum_steps
         args.eval_batch_size = orig_eval_batch_size
-
-        args.model = model_name
-        args.ablation = ablation
-        args.modalities = modalities
-        set_seed(args.seed)
-
-        model = build_model(args, dataset)
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-        mod_display = f"_{modalities}" if model_name in ('multimodal_complex', 'multimodal_cascade') else ""
-        display_name = model_name if ablation is None else f"{model_name}_{ablation}"
-        display_name = f"{display_name}{mod_display}"
-        print(f"\nModel: {display_name} | Total params: {total_params:,} | Trainable: {trainable_params,}")
-
-        model = model.to(args.device)
-        mem_trace(f"after model.to({args.device})", args.device)
-
-        tuned = auto_tune_config(model, dataset, args)
-        if tuned:
-            for k, v in tuned.items():
-                setattr(args, k, v)
-        mem_trace("after auto_tune", args.device)
-
-        active_mods = MODALITY_SET_MAP.get(modalities, {"text"})
-        print(f"Training {display_name} on {args.device}...")
-
+        _skip = getattr(args, 'skip_calibrate', False)
         max_vram_retries = 5
-        for vram_attempt in range(max_vram_retries + 1):
+
+        for vram_attempt in range(1 if _skip else (max_vram_retries + 1)):
             try:
+                args.model = model_name
+                args.ablation = ablation
+                args.modalities = modalities
+                set_seed(args.seed)
+
+                model = build_model(args, dataset)
+                total_params = sum(p.numel() for p in model.parameters())
+                trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+                mod_display = f"_{modalities}" if model_name in ('multimodal_complex', 'multimodal_cascade') else ""
+                display_name = model_name if ablation is None else f"{model_name}_{ablation}"
+                display_name = f"{display_name}{mod_display}"
+                print(f"\nModel: {display_name} | Total params: {total_params:,} | Trainable: {trainable_params,}")
+
+                model = model.to(args.device)
+                mem_trace(f"after model.to({args.device})", args.device)
+
+                if getattr(args, 'skip_calibrate', False):
+                    print(f"  [AUTO-TUNE] Skipped by --skip-calibrate; using explicit batch_size={args.batch_size} neg={args.num_negatives} ga={args.grad_accum_steps}")
+                else:
+                    tuned = auto_tune_config(model, dataset, args)
+                    if tuned:
+                        for k, v in tuned.items():
+                            setattr(args, k, v)
+                mem_trace("after auto_tune", args.device)
+
+                active_mods = MODALITY_SET_MAP.get(modalities, {"text"})
+                print(f"Training {display_name} on {args.device}...")
                 results = train_model(model, dataset, evaluator, args, active_modalities=active_mods)
                 break
             except VRAMExceeded as ve:
+                if _skip:
+                    raise
                 if vram_attempt >= max_vram_retries:
                     print(f"\n[VRAM] Max retries ({max_vram_retries}) exhausted for {display_name}")
                     if args.benchmark:

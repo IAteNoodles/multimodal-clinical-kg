@@ -2,6 +2,7 @@ import ast
 import json
 import math
 import pickle
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,6 +90,12 @@ ECG_SCP_TO_DISEASE = {
     'NST_': 'STTChanges',
     'DIG': 'STTChanges',
     'LNGQT': 'ConductionDisease',
+    'SR': 'SinusRhythm',
+    'SA': 'SinusArrhythmia',
+    'JER': 'JunctionalRhythm',
+    'AJR': 'JunctionalRhythm',
+    'AVNRT': 'SupraventricularTachycardia',
+    'AVRT': 'SupraventricularTachycardia',
 }
 
 CHEXPERT_TO_ANATOMY = {
@@ -108,7 +115,7 @@ CHEXPERT_TO_ANATOMY = {
     'Support_Devices': [],
 }
 
-ECG_ANATOMY = ['Atria', 'Ventricles', 'AV_Node', 'SA_Node', 'Bundle_of_His', 'Purkinje_Fibers']
+ECG_ANATOMY = ['Atria', 'Ventricles', 'AV_Node']
 
 SCP_TO_ANATOMY = {
     'IMI': ['InferiorWall', 'Ventricles'],
@@ -167,6 +174,13 @@ RADGRAPH_TO_CHEXPERT = {
     'lung lesion': 'Lung_Lesion',
     'pleural effusion': 'Pleural_Effusion',
 }
+
+
+def _normalize_anatomy_name(name: str) -> str:
+    normalized = name.strip()
+    normalized = re.sub(r'\s+', '_', normalized)
+    parts = normalized.split('_')
+    return '_'.join(p.capitalize() for p in parts if p)
 
 
 @dataclass
@@ -391,7 +405,7 @@ def extract_chexpert_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFr
         patient_findings[subject_id].append(label)
 
         if pd.notna(study_id):
-            kg.add_relation(Relation(head=f"STY_{int(study_id)}", relation="finding_of", tail=fnd_id, weight=1.0))
+            kg.add_relation(Relation(head=fnd_id, relation="finding_of", tail=f"STY_{int(study_id)}", weight=1.0))
 
         disease_name = CHEXPERT_TO_DISEASE.get(label)
         if disease_name:
@@ -400,8 +414,8 @@ def extract_chexpert_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFr
             kg.add_relation(Relation(head=fnd_id, relation="indicates", tail=dis_id, weight=1.0))
 
         for anat in CHEXPERT_TO_ANATOMY.get(label, []):
-            anat_id = f"ANAT_{anat}"
-            _add_entity_if_new(kg, anat_id, "Anatomy", "CXR", anat)
+            anat_id = f"ANAT_{_normalize_anatomy_name(anat)}"
+            _add_entity_if_new(kg, anat_id, "Anatomy", "CXR", _normalize_anatomy_name(anat))
             kg.add_relation(Relation(head=fnd_id, relation="located_at", tail=anat_id, weight=1.0))
 
     print(f"  Extracted {kg.entity_type_counts.get('Finding', 0)} CXR findings, "
@@ -470,8 +484,8 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
 
                 kg.add_relation(Relation(head=f"PAT_PTB{patient_id}", relation="has_finding",
                                          tail=fnd_id, weight=float(prob)))
-                kg.add_relation(Relation(head=f"STY_ECG{ecg_id}", relation="finding_of",
-                                         tail=fnd_id, weight=1.0))
+                kg.add_relation(Relation(head=fnd_id, relation="finding_of",
+                                         tail=f"STY_ECG{ecg_id}", weight=1.0))
                 patient_findings[patient_id].append(code_str)
 
                 disease_name = ECG_CLASS_TO_DISEASE.get(diag_class)
@@ -491,27 +505,26 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
 
                 anats = SCP_TO_ANATOMY.get(code_str, [])
                 for anat in anats:
-                    anat_id = f"ANAT_{anat}"
-                    _add_entity_if_new(kg, anat_id, "Anatomy", "ECG", anat)
+                    anat_id = f"ANAT_{_normalize_anatomy_name(anat)}"
+                    _add_entity_if_new(kg, anat_id, "Anatomy", "ECG", _normalize_anatomy_name(anat))
                     kg.add_relation(Relation(head=fnd_id, relation="located_at",
                                              tail=anat_id, weight=1.0))
 
-            elif code_str in ('AFIB', 'SR', 'STACH', 'SBRAD', 'SVTAC', 'AFLT',
-                              'AVB_TYPE1', 'AVB_TYPE2', 'AVB_TYPE3'):
+            elif code_str in ECG_SCP_TO_DISEASE:
                 fnd_id = f"FND_ECG_{code_str}"
                 _add_entity_if_new(kg, fnd_id, "Finding", "ECG", code_str,
                                    properties={'rhythm': True, 'probability': prob})
 
                 kg.add_relation(Relation(head=f"PAT_PTB{patient_id}", relation="has_finding",
                                          tail=fnd_id, weight=float(prob)))
-                kg.add_relation(Relation(head=f"STY_ECG{ecg_id}", relation="finding_of",
-                                         tail=fnd_id, weight=1.0))
+                kg.add_relation(Relation(head=fnd_id, relation="finding_of",
+                                         tail=f"STY_ECG{ecg_id}", weight=1.0))
                 patient_findings[patient_id].append(code_str)
 
                 anats = SCP_TO_ANATOMY.get(code_str, [])
                 for anat in anats:
-                    anat_id = f"ANAT_{anat}"
-                    _add_entity_if_new(kg, anat_id, "Anatomy", "ECG", anat)
+                    anat_id = f"ANAT_{_normalize_anatomy_name(anat)}"
+                    _add_entity_if_new(kg, anat_id, "Anatomy", "ECG", _normalize_anatomy_name(anat))
                     kg.add_relation(Relation(head=fnd_id, relation="located_at",
                                              tail=anat_id, weight=1.0))
 
@@ -524,7 +537,7 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
                                              tail=scp_dis_id, weight=1.0))
 
     for anat in ECG_ANATOMY:
-        _add_entity_if_new(kg, f"ANAT_{anat}", "Anatomy", "ECG", anat)
+        _add_entity_if_new(kg, f"ANAT_{_normalize_anatomy_name(anat)}", "Anatomy", "ECG", _normalize_anatomy_name(anat))
 
     print(f"  Extracted {sum(1 for e in kg.entities.values() if e.type == 'Finding' and e.modality == 'ECG')} ECG findings, "
           f"{len(patient_findings)} PTB-XL patients with findings")
@@ -571,8 +584,8 @@ def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, List[
                     _add_entity_if_new(kg, fnd_id, "Finding", "RAD", ent['tokens'].lower())
 
                 elif ent.get('label') == 'ANAT-DP':
-                    anat_id = f"ANAT_{ent['tokens'].lower()}"
-                    _add_entity_if_new(kg, anat_id, "Anatomy", "RAD", ent['tokens'].lower())
+                    anat_id = f"ANAT_{_normalize_anatomy_name(ent['tokens'])}"
+                    _add_entity_if_new(kg, anat_id, "Anatomy", "RAD", _normalize_anatomy_name(ent['tokens']))
 
             doc_relations = doc_data.get('relations', {})
             for rel_id, rel in doc_relations.items():
@@ -590,7 +603,7 @@ def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, List[
                     tgt_ent = doc_entities[obj2]
                     if src_ent.get('label') in ('OBS-DP', 'OBS-DA') and tgt_ent.get('label') == 'ANAT-DP':
                         fnd_id = f"FND_RAD_{src_ent['tokens'].lower()}"
-                        anat_id = f"ANAT_{tgt_ent['tokens'].lower()}"
+                        anat_id = f"ANAT_{_normalize_anatomy_name(tgt_ent['tokens'])}"
                         kg.add_relation(Relation(head=fnd_id, relation="located_at",
                                                  tail=anat_id, weight=1.0))
 
@@ -623,8 +636,8 @@ def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, List[
                     fnd_id = f"FND_RAD_{ent['tokens'].lower()}"
                     _add_entity_if_new(kg, fnd_id, "Finding", "RAD", ent['tokens'].lower())
                 elif ent.get('label') == 'ANAT-DP':
-                    anat_id = f"ANAT_{ent['tokens'].lower()}"
-                    _add_entity_if_new(kg, anat_id, "Anatomy", "RAD", ent['tokens'].lower())
+                    anat_id = f"ANAT_{_normalize_anatomy_name(ent['tokens'])}"
+                    _add_entity_if_new(kg, anat_id, "Anatomy", "RAD", _normalize_anatomy_name(ent['tokens']))
 
     print(f"  RadGraph: {sum(1 for e in kg.entities.values() if e.type == 'Finding' and e.modality == 'RAD')} findings, "
           f"{sum(1 for e in kg.entities.values() if e.type == 'Anatomy' and e.modality == 'RAD')} anatomy nodes")
@@ -667,8 +680,8 @@ def link_radgraph_to_cxr(kg: ClinicalKG, data_dir: Path) -> None:
             if ent.get('label') in ('OBS-DP', 'OBS-DA'):
                 fnd_id = f"FND_RAD_{ent['tokens'].lower()}"
                 if fnd_id in kg.entities:
-                    kg.add_relation(Relation(head=study_id_str, relation="finding_of",
-                                             tail=fnd_id, weight=1.0))
+                    kg.add_relation(Relation(head=fnd_id, relation="finding_of",
+                                             tail=study_id_str, weight=1.0))
 
                     lower_text = ent['tokens'].lower()
                     chexpert_match = RADGRAPH_TO_CHEXPERT.get(lower_text)
@@ -703,17 +716,38 @@ def build_same_patient_edges(kg: ClinicalKG, chexpert_df: pd.DataFrame, data_dir
         subject_id = row.get('subject_id')
         study_id = row.get('study_id')
         if pd.notna(subject_id) and pd.notna(study_id):
-            patient_studies[int(subject_id)].append(f"STY_{int(study_id)}")
+            sty_id = f"STY_{int(study_id)}"
+            if sty_id in kg.entities:
+                patient_studies[int(subject_id)].append(sty_id)
 
     count = 0
     for sid, studies in patient_studies.items():
-        studies = studies[:20]  # cap to avoid O(n²) explosion
+        studies = studies[:20]
         for i in range(len(studies)):
             for j in range(i + 1, len(studies)):
                 kg.add_relation(Relation(head=studies[i], relation="same_patient",
                                          tail=studies[j], weight=1.0))
                 count += 1
     print(f"  Added {count} same_patient edges from CXR")
+
+    ecg_patient_studies: Dict[str, List[str]] = defaultdict(list)
+    for rel in kg.relations:
+        if rel.relation == "finding_of" and rel.tail.startswith("STY_ECG"):
+            study_id = rel.tail
+            for fnd_rel in kg.relations:
+                if fnd_rel.relation == "has_finding" and fnd_rel.tail == rel.head:
+                    ecg_patient_studies[fnd_rel.head].append(study_id)
+                    break
+
+    ecg_count = 0
+    for pat_id, studies in ecg_patient_studies.items():
+        studies = list(dict.fromkeys(studies))[:20]
+        for i in range(len(studies)):
+            for j in range(i + 1, len(studies)):
+                kg.add_relation(Relation(head=studies[i], relation="same_patient",
+                                         tail=studies[j], weight=1.0))
+                ecg_count += 1
+    print(f"  Added {ecg_count} same_patient edges from ECG")
 
 
 CLINICAL_CROSS_MODAL_EDGES = {
@@ -910,7 +944,7 @@ def build_cross_modal_edges(kg: ClinicalKG, chexpert_df: pd.DataFrame, data_dir:
             p_ecg = max(ecg_count / total_patients, 1e-10)
             pmi = math.log(p_joint / (p_cxr * p_ecg)) if p_joint > 0 else 0.0
 
-            if pmi > 0.0 or count >= 1:
+            if pmi > 0.5:
                 norm_pmi = max(0.0, min(1.0, pmi / 3.0))
                 if cxr_id in kg.entities and ecg_id in kg.entities:
                     kg.add_relation(Relation(head=cxr_id, relation="suggestive_of",

@@ -38,9 +38,9 @@ OUTPUT_DIR = DATA_DIR / "kg" / "data_new"
 ENTITY_TYPE_TO_ID = {
     "Finding": 0, "Anatomy": 1, "Disease": 2, "Patient": 3,
     "Study": 4, "Drug": 5, "LabResult": 6, "Procedure": 7, "VitalResult": 8,
-    "ECGMeasurement": 9, "Unknown": 10,
+    "ECGMeasurement": 9, "ECGRhythm": 10, "Unknown": 11,
 }
-ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "ECGMeasurement", "Unknown"]
+ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "ECGMeasurement", "ECGRhythm", "Unknown"]
 
 MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, None: 4}
 
@@ -162,6 +162,19 @@ VITAL_SIGNS = {
     "temperature": ("Temp", 38.0, 36.0),
     "sbp": ("SBP", 140, 90),
     "dbp": ("DBP", 90, 60),
+    "mbp": ("MBP", 110, 70),
+    "glucose": ("Gluc", 180, 60),
+}
+
+VITAL_COLUMN_ALIASES = {
+    "heart_rate": ["heart_rate", "heartrate"],
+    "resp_rate": ["resp_rate", "resprate", "respiratory_rate"],
+    "spo2": ["spo2", "o2_saturation"],
+    "temperature": ["temperature", "temp"],
+    "sbp": ["sbp", "systolic_bp"],
+    "dbp": ["dbp", "diastolic_bp"],
+    "mbp": ["mbp", "mean_bp"],
+    "glucose": ["glucose", "blood_glucose"],
 }
 
 LAB_TO_DISEASE = {
@@ -297,6 +310,21 @@ ECG_MEASUREMENT_THRESHOLDS = {
     },
 }
 
+ECG_COMPUTED_COLUMNS = {
+    "qrs_duration": {
+        "source_cols": ["qrs_onset", "qrs_end"],
+        "compute": lambda df: df["qrs_end"] - df["qrs_onset"],
+    },
+    "pr_interval": {
+        "source_cols": ["p_onset", "qrs_onset"],
+        "compute": lambda df: df["qrs_onset"] - df["p_onset"],
+    },
+    "qtc": {
+        "source_cols": ["t_end", "qrs_onset", "rr_interval"],
+        "compute": lambda df: (df["t_end"] - df["qrs_onset"]) / (df["rr_interval"] / 1000).apply(math.sqrt),
+    },
+}
+
 ECG_MEASUREMENT_TO_DISEASE = {
     "ECGM_Wide_QRS": "DIS_ConductionAbnormality",
     "ECGM_PR_Prolonged": "DIS_FirstDegreeAVBlock",
@@ -328,14 +356,20 @@ RHYTHM_PATTERNS = {
 }
 
 RHYTHM_TO_DISEASE = {
+    "ECGR_Sinus_Rhythm": "DIS_SinusRhythm",
     "ECGR_Sinus_Tachycardia": "DIS_Tachycardia",
     "ECGR_Sinus_Bradycardia": "DIS_Bradycardia",
+    "ECGR_Sinus_Arrhythmia": "DIS_SinusArrhythmia",
     "ECGR_Atrial_Fibrillation": "DIS_AtrialFibrillation",
     "ECGR_Atrial_Flutter": "DIS_AtrialFlutter",
-    "ECGR_Ventricular_Tachycardia": "DIS_VentricularTachycardia",
-    "ECGR_Ventricular_Fibrillation": "DIS_VentricularFibrillation",
+    "ECGR_Junctional_Escape_Rhythm": "DIS_JunctionalRhythm",
+    "ECGR_Accelerated_Junctional_Rhythm": "DIS_JunctionalRhythm",
     "ECGR_Supraventricular_Tachycardia": "DIS_SupraventricularTachycardia",
     "ECGR_Atrial_Tachycardia": "DIS_AtrialTachycardia",
+    "ECGR_AVNRT": "DIS_SupraventricularTachycardia",
+    "ECGR_AVRT": "DIS_SupraventricularTachycardia",
+    "ECGR_Ventricular_Tachycardia": "DIS_VentricularTachycardia",
+    "ECGR_Ventricular_Fibrillation": "DIS_VentricularFibrillation",
 }
 
 
@@ -353,6 +387,12 @@ def _sanitize_name(name: str) -> str:
     sanitized = re.sub(r'_+', '_', sanitized)
     sanitized = sanitized.strip('_')
     return sanitized
+
+
+def _normalize_anatomy_name(name: str) -> str:
+    normalized = name.lower().strip()
+    normalized = re.sub(r'\s+', '_', normalized)
+    return normalized
 
 
 def _parse_datetime(val: Any) -> Optional[datetime]:
@@ -414,6 +454,7 @@ def load_crosswalks(output_dir: Path) -> Dict[str, Any]:
 
 def _build_crosswalks() -> Dict[str, Any]:
     icd_to_cui: Dict[str, str] = {}
+    icd10pcs_to_cui: Dict[str, str] = {}
     cui_to_snomed: Dict[str, str] = {}
     rxnorm_to_cui: Dict[str, str] = {}
     cui_to_name: Dict[str, str] = {}
@@ -445,6 +486,11 @@ def _build_crosswalks() -> Dict[str, Any]:
 
                 if sab == 'ICD10CM' and code:
                     icd_to_cui[code] = cui
+                if sab == 'ICD9CM' and code:
+                    icd_to_cui[code] = cui
+
+                if sab == 'ICD10PCS' and code:
+                    icd10pcs_to_cui[code] = cui
 
                 if sab == 'RXNORM' and tty in ('SCD', 'SBD', 'SCDG', 'SBDG', 'GPCK', 'BN', 'IN', 'PIN', 'MIN'):
                     if code:
@@ -496,12 +542,13 @@ def _build_crosswalks() -> Dict[str, Any]:
     else:
         print(f"  SNOMED Relationships not found at {SNOMED_REL_PATH}, skipping")
 
-    print(f"  Crosswalks: icd_to_cui={len(icd_to_cui)}, rxnorm_to_cui={len(rxnorm_to_cui)}, "
+    print(f"  Crosswalks: icd_to_cui={len(icd_to_cui)}, icd10pcs_to_cui={len(icd10pcs_to_cui)}, rxnorm_to_cui={len(rxnorm_to_cui)}, "
           f"cui_to_snomed={len(cui_to_snomed)}, snomed_id_to_name={len(snomed_id_to_name)}, "
           + ", ".join(f"{name}={len(pairs)}" for name, pairs in snomed_rels.items()))
 
     result = {
         "icd_to_cui": icd_to_cui,
+        "icd10pcs_to_cui": icd10pcs_to_cui,
         "cui_to_snomed": cui_to_snomed,
         "rxnorm_to_cui": rxnorm_to_cui,
         "cui_to_name": cui_to_name,
@@ -528,6 +575,25 @@ def get_bq_client():
             f.write(creds.to_json())
 
     return bigquery.Client(credentials=creds, project=BQ_PROJECT_ID)
+
+
+_RESOLVED_DATASETS = {}
+
+def _resolve_bq_dataset(client, project: str, candidates: list) -> str:
+    for dataset in candidates:
+        key = f"{project}.{dataset}"
+        if key in _RESOLVED_DATASETS:
+            return _RESOLVED_DATASETS[key]
+        try:
+            sql = f"SELECT 1 FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLES` LIMIT 1"
+            client.query(sql).result()
+            _RESOLVED_DATASETS[key] = dataset
+            print(f"  BQ dataset resolved: {project}.{dataset}")
+            return dataset
+        except Exception:
+            continue
+    print(f"  WARNING: No BQ dataset found among: {candidates}")
+    return candidates[0]
 
 
 def _bq_query(client, sql: str) -> pd.DataFrame:
@@ -587,10 +653,10 @@ def extract_diagnoses_bq(kg: ClinicalKG, client, patient_ids: List[int],
         icd_lookup = dict(zip(zip(d_icd['icd_version'], d_icd['icd_code']), d_icd['long_title']))
     print(f"  Loaded {len(icd_lookup)} ICD diagnosis titles")
 
-    df['dis_id'] = 'DIS_ICD_' + df['icd_code']
     df['long_title'] = df.apply(
         lambda r: icd_lookup.get((r['icd_version'], r['icd_code']), r['icd_code']), axis=1
     )
+    df['dis_id'] = 'DIS_' + df['long_title'].apply(_sanitize_name)
     df['long_title'] = df['long_title'].str[:100]
 
     df['cui'] = None
@@ -621,6 +687,12 @@ def extract_diagnoses_bq(kg: ClinicalKG, client, patient_ids: List[int],
         pat_id = f"PAT_{row['subject_id']}"
         kg.add_relation(Relation(head=pat_id, relation="diagnosed_with", tail=row['dis_id'], weight=1.0))
         new_edges += 1
+
+    icd_to_dis_name: Dict[str, str] = {}
+    for _, row in df[['icd_code', 'icd_version', 'dis_id']].drop_duplicates(subset=['icd_code', 'icd_version']).iterrows():
+        key = f"{row['icd_code']}_{row['icd_version']}"
+        icd_to_dis_name[key] = row['dis_id']
+    crosswalks['icd_to_dis_name'] = icd_to_dis_name
 
     print(f"  Diagnoses: {unique_pairs['subject_id'].nunique()} patients, {new_diseases} new diseases, {new_edges} edges")
     return df
@@ -783,11 +855,14 @@ def extract_vital_signs_bq(kg: ClinicalKG, client, patient_ids: List[int]) -> pd
     print("Extracting vital signs from BigQuery...")
     id_list = ','.join(str(x) for x in patient_ids)
 
-    vital_cols = ', '.join(VITAL_SIGNS.keys())
+    vital_dataset = _resolve_bq_dataset(client, "physionet-data", ["mimiciv_3_1_derived", "mimiciv_derived"])
+
+    canonical_cols = list(VITAL_COLUMN_ALIASES.keys())
+    col_str = ', '.join(canonical_cols)
     print("  Querying BigQuery for vital signs...")
     sql = f"""
-    SELECT subject_id, charttime, {vital_cols}
-    FROM `physionet-data.mimiciv_3_1_derived.vitalsign`
+    SELECT subject_id, charttime, {col_str}
+    FROM `physionet-data.{vital_dataset}.vitalsign`
     WHERE subject_id IN ({id_list})
     LIMIT 500000
     """
@@ -798,6 +873,12 @@ def extract_vital_signs_bq(kg: ClinicalKG, client, patient_ids: List[int]) -> pd
         return df
 
     df['subject_id'] = df['subject_id'].astype(int)
+
+    for canonical, aliases in VITAL_COLUMN_ALIASES.items():
+        for alias in aliases:
+            if alias in df.columns and canonical not in df.columns:
+                df[canonical] = df[alias]
+                break
 
     vital_dfs = []
     for col, (abbr, high_thresh, low_thresh) in VITAL_SIGNS.items():
@@ -860,10 +941,184 @@ def extract_vital_signs_bq(kg: ClinicalKG, client, patient_ids: List[int]) -> pd
     return df
 
 
+def extract_ecg_measurements_bq(kg: ClinicalKG, client, patient_ids: List[int]) -> pd.DataFrame:
+    print("Extracting ECG measurements from BigQuery...")
+    id_list = ','.join(str(x) for x in patient_ids)
+
+    ecg_dataset = _resolve_bq_dataset(client, "physionet-data", ["mimiciv_ecg", "mimiciv_3_1_ecg"])
+
+    ECG_BQ_COLUMNS = ["rr_interval", "qrs_onset", "qrs_end", "p_onset", "p_end", "t_end", "p_axis", "qrs_axis", "t_axis"]
+    meas_cols = ', '.join(ECG_BQ_COLUMNS)
+    print("  Querying BigQuery for ECG measurements...")
+    sql = f"""
+    SELECT subject_id, study_id, {meas_cols}
+    FROM `physionet-data.{ecg_dataset}.machine_measurements`
+    WHERE subject_id IN ({id_list})
+    LIMIT 500000
+    """
+    df = _bq_query(client, sql)
+    print(f"  Got {len(df)} ECG measurement rows from BigQuery")
+    if df.empty:
+        print("  No ECG measurement data returned")
+        return df
+
+    df['subject_id'] = df['subject_id'].astype(int)
+    df['study_id'] = df['study_id'].astype(int)
+
+    for col_name, col_spec in ECG_COMPUTED_COLUMNS.items():
+        source_ok = all(c in df.columns for c in col_spec["source_cols"])
+        if source_ok:
+            df[col_name] = col_spec["compute"](df)
+
+    ecg_dfs = []
+    for col, thresholds in ECG_MEASUREMENT_THRESHOLDS.items():
+        if col not in df.columns:
+            continue
+        sub = df[['subject_id', 'study_id', col]].dropna(subset=[col]).copy()
+        sub[col] = sub[col].astype(float)
+        high_val, high_id, high_label = thresholds['high']
+        high = sub[sub[col] > high_val].copy()
+        high['ecgm_id'] = high_id
+        high['ecgm_label'] = high_label
+        ecg_dfs.append(high[['subject_id', 'study_id', 'ecgm_id', 'ecgm_label']].drop_duplicates())
+        if thresholds['low'] is not None:
+            low_val, low_id, low_label = thresholds['low']
+            low = sub[sub[col] < low_val].copy()
+            low['ecgm_id'] = low_id
+            low['ecgm_label'] = low_label
+            ecg_dfs.append(low[['subject_id', 'study_id', 'ecgm_id', 'ecgm_label']].drop_duplicates())
+
+    if not ecg_dfs:
+        print("  ECG: 0 patients, 0 measurement entities, 0 edges")
+        return df
+
+    all_ecg = pd.concat(ecg_dfs, ignore_index=True).drop_duplicates(subset=['subject_id', 'study_id', 'ecgm_id'])
+
+    new_meas = 0
+    new_edges = 0
+    unique_meas_entities = all_ecg[['ecgm_id', 'ecgm_label']].drop_duplicates(subset=['ecgm_id'])
+    for _, row in unique_meas_entities.iterrows():
+        is_new = row['ecgm_id'] not in kg.entities
+        _add_entity_if_new(kg, row['ecgm_id'], "ECGMeasurement", "ECG", row['ecgm_label'])
+        if is_new:
+            new_meas += 1
+
+    missing_patients = all_ecg['subject_id'].unique()
+    for sid in missing_patients:
+        pat_id = f"PAT_{sid}"
+        if pat_id not in kg.entities:
+            _add_entity_if_new(kg, pat_id, "Patient", "STR", str(sid))
+
+    study_ids_seen = set()
+    for _, row in tqdm(all_ecg.iterrows(), total=len(all_ecg), desc="ECG measurements"):
+        pat_id = f"PAT_{row['subject_id']}"
+        sty_id = f"STY_ECG_{row['study_id']}"
+        if sty_id not in study_ids_seen:
+            study_ids_seen.add(sty_id)
+            _add_entity_if_new(kg, sty_id, "Study", "ECG", f"ECG Study {row['study_id']}")
+            kg.add_relation(Relation(head=pat_id, relation="has_study", tail=sty_id, weight=1.0))
+        kg.add_relation(Relation(head=pat_id, relation="has_ecg_measurement", tail=row['ecgm_id'], weight=1.0))
+        kg.add_relation(Relation(head=row['ecgm_id'], relation="finding_of", tail=sty_id, weight=1.0))
+        new_edges += 1
+
+    indicates_edges = 0
+    for ecgm_id, dis_id in ECG_MEASUREMENT_TO_DISEASE.items():
+        if ecgm_id not in kg.entities:
+            continue
+        if dis_id not in kg.entities:
+            _add_entity_if_new(kg, dis_id, "Disease", "ECG", dis_id.replace("DIS_", ""))
+        kg.add_relation(Relation(head=ecgm_id, relation="indicates", tail=dis_id, weight=1.0))
+        indicates_edges += 1
+
+    print(f"  ECG measurements: {all_ecg['subject_id'].nunique()} patients, {new_meas} measurement entities, "
+          f"{new_edges} has_ecg_measurement edges, {indicates_edges} indicates edges")
+
+    print("  Querying BigQuery for ECG rhythm data (from report text)...")
+    report_cols = ', '.join(f'report_{i}' for i in range(18))
+    sql_rhythm = f"""
+    SELECT subject_id, study_id, {report_cols}
+    FROM `physionet-data.{ecg_dataset}.machine_measurements`
+    WHERE subject_id IN ({id_list})
+    """
+    rhythm_df = _bq_query(client, sql_rhythm)
+    print(f"  Got {len(rhythm_df)} ECG report rows from BigQuery")
+    if not rhythm_df.empty:
+        rhythm_df['subject_id'] = rhythm_df['subject_id'].astype(int)
+        rhythm_df['study_id'] = rhythm_df['study_id'].astype(int)
+        import re
+        report_col_list = [f'report_{i}' for i in range(18)]
+        rhythm_rows = []
+        rhythm_patterns_re = {code: re.compile(r'\b' + re.escape(code) + r'\b') for code in RHYTHM_PATTERNS}
+        for _, row in rhythm_df.iterrows():
+            text = ' '.join(str(row[c]) for c in report_col_list if pd.notna(row.get(c))).upper()
+            for rhy_code, pat in rhythm_patterns_re.items():
+                if pat.search(text):
+                    ecgr_id, ecgr_label = RHYTHM_PATTERNS[rhy_code]
+                    rhythm_rows.append({
+                        'subject_id': row['subject_id'],
+                        'study_id': row['study_id'],
+                        'ecgr_id': ecgr_id,
+                        'ecgr_label': ecgr_label,
+                    })
+        if rhythm_rows:
+            rhythm_entities = pd.DataFrame(rhythm_rows).drop_duplicates(subset=['subject_id', 'study_id', 'ecgr_id'])
+            new_rhythm = 0
+            rhythm_edges = 0
+            unique_rhythm = rhythm_entities[['ecgr_id', 'ecgr_label']].drop_duplicates(subset=['ecgr_id'])
+            for _, row in unique_rhythm.iterrows():
+                is_new = row['ecgr_id'] not in kg.entities
+                _add_entity_if_new(kg, row['ecgr_id'], "ECGRhythm", "ECG", row['ecgr_label'])
+                if is_new:
+                    new_rhythm += 1
+            for _, row in tqdm(rhythm_entities.iterrows(), total=len(rhythm_entities), desc="ECG rhythm"):
+                pat_id = f"PAT_{row['subject_id']}"
+                sty_id = f"STY_ECG_{row['study_id']}"
+                if sty_id not in kg.entities:
+                    _add_entity_if_new(kg, sty_id, "Study", "ECG", f"ECG Study {row['study_id']}")
+                    kg.add_relation(Relation(head=pat_id, relation="has_study", tail=sty_id, weight=1.0))
+                kg.add_relation(Relation(head=pat_id, relation="has_ecg_measurement", tail=row['ecgr_id'], weight=1.0))
+                kg.add_relation(Relation(head=row['ecgr_id'], relation="finding_of", tail=sty_id, weight=1.0))
+                rhythm_edges += 1
+            rhythm_indicates = 0
+            for ecgr_id, dis_id in RHYTHM_TO_DISEASE.items():
+                if ecgr_id not in kg.entities:
+                    continue
+                if dis_id not in kg.entities:
+                    _add_entity_if_new(kg, dis_id, "Disease", "ECG", dis_id.replace("DIS_", ""))
+                kg.add_relation(Relation(head=ecgr_id, relation="indicates", tail=dis_id, weight=1.0))
+                rhythm_indicates += 1
+            print(f"  ECG rhythm: {rhythm_entities['subject_id'].nunique()} patients, {new_rhythm} rhythm entities, "
+                  f"{rhythm_edges} has_ecg_measurement edges, {rhythm_indicates} indicates edges")
+        else:
+            print("  ECG rhythm: 0 rhythm entities (no matching patterns)")
+    else:
+        print("  No ECG rhythm data returned")
+
+    ecg_patient_studies: Dict[int, List[str]] = defaultdict(list)
+    for rel in kg.relations:
+        if rel.relation == "has_study" and rel.tail.startswith("STY_ECG_"):
+            pat_id = rel.head
+            if pat_id.startswith("PAT_"):
+                ecg_patient_studies[int(pat_id[4:])].append(rel.tail)
+
+    ecg_same_patient = 0
+    for sid, studies in ecg_patient_studies.items():
+        studies = studies[:20]
+        for i in range(len(studies)):
+            for j in range(i + 1, len(studies)):
+                kg.add_relation(Relation(head=studies[i], relation="same_patient", tail=studies[j], weight=1.0))
+                ecg_same_patient += 1
+    if ecg_same_patient > 0:
+        print(f"  Added {ecg_same_patient} ECG same_patient edges")
+
+    return df
+
+
 def extract_procedures_bq(kg: ClinicalKG, client, patient_ids: List[int],
                           crosswalks: Dict[str, Any]) -> pd.DataFrame:
     print("Extracting procedures from BigQuery...")
     icd_to_cui = crosswalks["icd_to_cui"]
+    icd10pcs_to_cui = crosswalks.get("icd10pcs_to_cui", {})
     cui_to_snomed = crosswalks["cui_to_snomed"]
     snomed_id_to_name = crosswalks["snomed_id_to_name"]
 
@@ -948,7 +1203,7 @@ def extract_procedures_bq(kg: ClinicalKG, client, patient_ids: List[int],
         icd10_codes = df[df['icd_version'] == '10'][['icd_code']].drop_duplicates()
         rel_edges = 0
         for _, row in icd10_codes.iterrows():
-            cui = icd_to_cui.get(row['icd_code'])
+            cui = icd_to_cui.get(row['icd_code']) or icd10pcs_to_cui.get(row['icd_code'])
             if not cui:
                 continue
             snomed_id = cui_to_snomed.get(cui)
@@ -987,16 +1242,19 @@ def build_drug_disease_edges(kg: ClinicalKG, client, patient_ids: List[int],
     csv_path = Path(r"C:\Users\Noodl\Projects\Research\MultiModal\bq_results\mrrel_mimic_drug_disease_filtered.csv")
 
     icd_to_cui = crosswalks.get("icd_to_cui", {})
-    cui_to_icd: Dict[str, str] = {v: k for k, v in icd_to_cui.items()}
     cui_to_name = crosswalks.get("cui_to_name", {})
 
     drug_entities = {eid: entity for eid, entity in kg.entities.items() if entity.type == "Drug"}
     cui_to_drug_entity: Dict[str, str] = {}
 
     drug_name_lower_to_eid: Dict[str, str] = {}
+    drug_word_index: Dict[str, List[str]] = defaultdict(list)
     for eid, entity in drug_entities.items():
         name_lower = entity.label.lower().strip()
         drug_name_lower_to_eid[name_lower] = eid
+        for word in name_lower.split():
+            if len(word) >= 2:
+                drug_word_index[word].append(eid)
 
     csv_drug_cuis = set()
     if csv_path.exists():
@@ -1018,8 +1276,10 @@ def build_drug_disease_edges(kg: ClinicalKG, client, patient_ids: List[int],
 
         umls_lower = umls_name.lower().strip()
         matched = False
-        for eid, entity in drug_entities.items():
-            label_lower = entity.label.lower().strip()
+
+        prefix_candidates = set(drug_word_index.get(umls_lower.split()[0], [])) if umls_lower.split() else set()
+        for eid in prefix_candidates:
+            label_lower = drug_entities[eid].label.lower().strip()
             if label_lower.startswith(umls_lower) or label_lower == umls_lower:
                 cui_to_drug_entity[cui] = eid
                 matched = True
@@ -1027,22 +1287,71 @@ def build_drug_disease_edges(kg: ClinicalKG, client, patient_ids: List[int],
 
         if not matched:
             umls_words = set(umls_lower.split())
-            for eid, entity in drug_entities.items():
-                label_words = set(entity.label.lower().split())
-                if umls_words.issubset(label_words) and len(umls_words) > 0:
-                    cui_to_drug_entity[cui] = eid
-                    matched = True
-                    break
+            umls_words = {w for w in umls_words if len(w) >= 2}
+            if umls_words:
+                candidate_eids: Dict[str, int] = defaultdict(int)
+                for w in umls_words:
+                    for eid in drug_word_index.get(w, []):
+                        candidate_eids[eid] += 1
+                for eid, count in sorted(candidate_eids.items(), key=lambda x: -x[1]):
+                    label_words = {w for w in drug_entities[eid].label.lower().split() if len(w) >= 2}
+                    if umls_words.issubset(label_words):
+                        cui_to_drug_entity[cui] = eid
+                        matched = True
+                        break
 
         if not matched:
             cui_to_drug_entity[cui] = _add_entity_if_new(kg, sanitized, "Drug", "STR", umls_name).id
 
+    cui_to_name = crosswalks.get("cui_to_name", {})
+    dis_name_to_eid: Dict[str, str] = {}
+    dis_word_index: Dict[str, List[str]] = defaultdict(list)
+    dis_eid_to_label: Dict[str, str] = {}
+    _STOP = {'of', 'the', 'and', 'in', 'with', 'by', 'from', 'to', 'a', 'an', 'or', 'nos', 'unspecified'}
+    for eid, ent in kg.entities.items():
+        if ent.type == "Disease":
+            dis_name_to_eid[ent.label.lower()] = eid
+            dis_eid_to_label[eid] = ent.label.lower()
+            for word in ent.label.lower().split():
+                if len(word) >= 2 and word not in _STOP:
+                    dis_word_index[word].append(eid)
+
+    icd_to_dis_name = crosswalks.get("icd_to_dis_name", {})
     cui_to_dis_entity: Dict[str, str] = {}
-    for eid, entity in kg.entities.items():
-        if entity.type == "Disease" and eid.startswith("DIS_ICD_"):
-            icd = eid.replace("DIS_ICD_", "")
-            if icd in icd_to_cui:
-                cui_to_dis_entity[icd_to_cui[icd]] = eid
+    for icd_key, dis_id in icd_to_dis_name.items():
+        if dis_id in kg.entities:
+            icd_code = icd_key.rsplit('_', 1)[0]
+            cui = icd_to_cui.get(icd_code)
+            if cui:
+                cui_to_dis_entity[cui] = dis_id
+
+    for cui, umls_name in cui_to_name.items():
+        if cui in cui_to_dis_entity:
+            continue
+        sanitized = _sanitize_name(umls_name)
+        eid = f"DIS_{sanitized}"
+        if eid in kg.entities:
+            cui_to_dis_entity[cui] = eid
+        else:
+            lower_name = umls_name.lower()
+            if lower_name in dis_name_to_eid:
+                cui_to_dis_entity[cui] = dis_name_to_eid[lower_name]
+            else:
+                query_words = {w for w in lower_name.split() if len(w) >= 2 and w not in _STOP}
+                if query_words:
+                    candidate_eids: Dict[str, int] = defaultdict(int)
+                    for w in query_words:
+                        for ceid in dis_word_index.get(w, []):
+                            candidate_eids[ceid] += 1
+                    best_eid, best_score = None, 0.0
+                    for ceid, overlap in candidate_eids.items():
+                        cand_words = {w for w in dis_eid_to_label[ceid].split() if len(w) >= 2 and w not in _STOP}
+                        jaccard = len(query_words & cand_words) / len(query_words | cand_words)
+                        if jaccard > best_score:
+                            best_score = jaccard
+                            best_eid = ceid
+                    if best_eid and best_score >= 0.5:
+                        cui_to_dis_entity[cui] = best_eid
 
     ontology_edges = 0
     edge_counts: Dict[str, int] = defaultdict(int)
@@ -1276,11 +1585,19 @@ def build_temporal_edges_bq(kg: ClinicalKG, client, patient_ids: List[int],
                 event_frames.append(lab_all[['subject_id', 'hadm_id', 'timestamp', 'entity_id']])
 
     # Vital signs
-    vital_cols = ', '.join(VITAL_SIGNS.keys())
+    vital_dataset = _resolve_bq_dataset(client, "physionet-data", ["mimiciv_3_1_derived", "mimiciv_derived"])
+    real_vital_cols = {"heart_rate", "sbp", "dbp", "mbp", "sbp_ni", "dbp_ni", "mbp_ni",
+                       "resp_rate", "temperature", "spo2", "glucose"}
+    all_vital_cols = set()
+    for aliases in VITAL_COLUMN_ALIASES.values():
+        for a in aliases:
+            if a in real_vital_cols:
+                all_vital_cols.add(a)
+    vital_col_str = ', '.join(sorted(all_vital_cols))
     print("  Querying BigQuery for vital signs (temporal)...")
     sql_vit = f"""
-    SELECT v.subject_id, i.hadm_id, v.charttime, {vital_cols}
-    FROM `physionet-data.mimiciv_3_1_derived.vitalsign` v
+    SELECT v.subject_id, i.hadm_id, v.charttime, {vital_col_str}
+    FROM `physionet-data.{vital_dataset}.vitalsign` v
     LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i
     ON v.stay_id = i.stay_id
     WHERE v.subject_id IN ({id_list})
@@ -1290,6 +1607,12 @@ def build_temporal_edges_bq(kg: ClinicalKG, client, patient_ids: List[int],
     print(f"  Got {len(vit_df)} vital sign rows from BigQuery (temporal)")
     if not vit_df.empty:
         vit_df['subject_id'] = vit_df['subject_id'].astype(int)
+
+        for canonical, aliases in VITAL_COLUMN_ALIASES.items():
+            for alias in aliases:
+                if alias in vit_df.columns and canonical not in vit_df.columns:
+                    vit_df[canonical] = vit_df[alias]
+                    break
         vit_parts = []
         for col, (abbr, high_thresh, low_thresh) in VITAL_SIGNS.items():
             if col not in vit_df.columns:
@@ -1369,6 +1692,36 @@ def build_temporal_edges_bq(kg: ClinicalKG, client, patient_ids: List[int],
         if not proc_df.empty:
             event_frames.append(proc_df[['subject_id', 'hadm_id', 'timestamp', 'entity_id']])
 
+    print("  Querying BigQuery for ECG studies (temporal)...")
+    ecg_dataset_temp = _resolve_bq_dataset(client, "physionet-data", ["mimiciv_ecg", "mimiciv_3_1_ecg"])
+    sql_ecg_rec = f"""
+    SELECT r.subject_id, i.hadm_id, r.study_id, r.ecg_time
+    FROM `physionet-data.{ecg_dataset_temp}.record_list` r
+    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i
+    ON r.subject_id = i.subject_id
+    WHERE r.subject_id IN ({id_list})
+    """
+    ecg_rec_df = _bq_query(client, sql_ecg_rec)
+    print(f"  Got {len(ecg_rec_df)} ECG record rows from BigQuery (temporal)")
+    if not ecg_rec_df.empty:
+        ecg_rec_df['subject_id'] = ecg_rec_df['subject_id'].astype(int)
+        ecg_rec_df['hadm_id'] = ecg_rec_df['hadm_id'].fillna(0).astype(int)
+        ecg_rec_df['timestamp'] = ecg_rec_df['ecg_time'].apply(_parse_datetime)
+        ecg_rec_df = ecg_rec_df.dropna(subset=['timestamp'])
+        ecg_entity_rows = []
+        ecg_entity_types = {"ECGMeasurement", "ECGRhythm"}
+        for rel in kg.relations:
+            if rel.relation == "finding_of" and rel.head in kg.entities and kg.entities[rel.head].type in ecg_entity_types:
+                ecg_entity_rows.append({'entity_id': rel.head, 'study_key': rel.tail})
+        if ecg_entity_rows:
+            ecg_ent_df = pd.DataFrame(ecg_entity_rows)
+            ecg_rec_df['study_key'] = 'STY_ECG_' + ecg_rec_df['study_id'].astype(str)
+            ecg_merged = ecg_ent_df.merge(ecg_rec_df[['subject_id', 'hadm_id', 'timestamp', 'study_key']], on='study_key', how='left')
+            ecg_merged = ecg_merged.dropna(subset=['timestamp'])
+            ecg_merged = ecg_merged[ecg_merged['entity_id'].isin(kg.entities)]
+            if not ecg_merged.empty:
+                event_frames.append(ecg_merged[['subject_id', 'hadm_id', 'timestamp', 'entity_id']])
+
     if not event_frames:
         print("  Temporal: 0 admissions with temporal edges")
         return
@@ -1405,7 +1758,6 @@ def ensure_patient_finding_edges(kg: ClinicalKG, data_dir: Path) -> None:
     print("Ensuring patient-finding edges...")
 
     study_to_findings: Dict[str, Set[str]] = defaultdict(set)
-    study_to_patient: Dict[str, str] = {}
     existing_edges: Set[Tuple[str, str]] = set()
 
     patient_entities = {eid for eid, e in kg.entities.items() if e.type == "Patient"}
@@ -1415,32 +1767,33 @@ def ensure_patient_finding_edges(kg: ClinicalKG, data_dir: Path) -> None:
             study_to_findings[rel.head].add(rel.tail)
         elif rel.relation == "has_finding":
             existing_edges.add((rel.head, rel.tail))
-        elif rel.relation == "same_patient":
-            if rel.head.startswith("STY_") and rel.tail.startswith("PAT_"):
-                study_to_patient[rel.head] = rel.tail
-            elif rel.tail.startswith("STY_") and rel.head.startswith("PAT_"):
-                study_to_patient[rel.tail] = rel.head
-        elif rel.relation == "has_study":
-            if rel.head.startswith("PAT_") and rel.tail.startswith("STY_"):
-                study_to_patient[rel.tail] = rel.head
 
-    if len(study_to_patient) < len(study_to_findings):
-        for cxr_path in [
-            data_dir / "mimic_cxr_jpg" / "mimic-cxr-2.0.0-chexpert.csv",
-            data_dir / "mimic_cxr_jpg" / "mimic-cxr-2.0.0-chexpert.csv.gz",
-        ]:
-            if cxr_path.exists():
-                try:
-                    cxr_df = pd.read_csv(cxr_path, compression='gzip' if str(cxr_path).endswith('.gz') else None)
-                    if 'subject_id' in cxr_df.columns and 'study_id' in cxr_df.columns:
-                        for _, row in cxr_df.dropna(subset=['subject_id', 'study_id']).iterrows():
-                            sty_id = f"STY_{int(row['study_id'])}"
-                            pat_id = f"PAT_{int(row['subject_id'])}"
-                            if sty_id in study_to_findings and pat_id in patient_entities:
-                                study_to_patient[sty_id] = pat_id
-                    break
-                except Exception:
-                    pass
+    study_to_patient: Dict[str, str] = {}
+
+    for cxr_path in [
+        data_dir / "mimic_cxr_jpg" / "mimic-cxr-2.0.0-chexpert.csv",
+        data_dir / "mimic_cxr_jpg" / "mimic-cxr-2.0.0-chexpert.csv.gz",
+        data_dir / "mimic-cxr-2.0.0-metadata.csv",
+    ]:
+        if cxr_path.exists():
+            try:
+                cxr_df = pd.read_csv(cxr_path, compression='gzip' if str(cxr_path).endswith('.gz') else None)
+                if 'subject_id' in cxr_df.columns and 'study_id' in cxr_df.columns:
+                    for _, row in cxr_df.dropna(subset=['subject_id', 'study_id']).iterrows():
+                        sty_id = f"STY_{int(row['study_id'])}"
+                        pat_id = f"PAT_{int(row['subject_id'])}"
+                        if sty_id in study_to_findings and pat_id in patient_entities:
+                            study_to_patient[sty_id] = pat_id
+                break
+            except Exception:
+                pass
+
+    for rel in kg.relations:
+        if rel.relation == "has_study" and rel.tail.startswith("STY_ECG_"):
+            pat_id = rel.head
+            sty_id = rel.tail
+            if sty_id in study_to_findings and pat_id in patient_entities:
+                study_to_patient[sty_id] = pat_id
 
     new_edges = 0
     for sty_id, pat_id in study_to_patient.items():
@@ -1564,6 +1917,7 @@ def build_enhanced_kg(data_dir: Optional[Path] = None, output_dir: Optional[Path
     rx_df = extract_medications_bq(kg, client, patient_ids, crosswalks)
     extract_lab_results_bq(kg, client, patient_ids)
     extract_vital_signs_bq(kg, client, patient_ids)
+    ecg_df = extract_ecg_measurements_bq(kg, client, patient_ids)
     extract_procedures_bq(kg, client, patient_ids, crosswalks)
     build_drug_disease_edges(kg, client, patient_ids, crosswalks, diag_df, rx_df)
     build_snomed_disease_hierarchy(kg, crosswalks)

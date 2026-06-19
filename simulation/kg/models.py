@@ -398,7 +398,6 @@ class PIDSynergy(nn.Module):
             nn.Linear(hidden_dim, synergy_dim),
             nn.Sigmoid(),
         )
-        nn.init.zeros_(self.pair_encoder[0].weight)
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, head_mod_ids: LongTensor, tail_mod_ids: LongTensor, relation_ids: LongTensor) -> FloatTensor:
@@ -814,11 +813,11 @@ class MultimodalCASCADEModel(nn.Module):
 
         has_mod = torch.sigmoid(self.has_modality_logit[entity_ids]).squeeze(-1)
 
-        if self.ablation != "no_modality":
+        if self.ablation not in ("no_modality", "all"):
             mod_emb = self.modality_embeddings(entity_modality_ids[entity_ids])
             re = re + mod_emb * has_mod.unsqueeze(-1)
 
-        if self.ablation != "no_type":
+        if self.ablation not in ("no_type", "all"):
             type_emb = self.entity_type_embeddings(entity_type_ids[entity_ids])
             re = re + type_emb
 
@@ -930,7 +929,7 @@ class MultimodalCASCADEModel(nn.Module):
 
         base_score = self._complEx_score(h_re, h_im, r_re, r_im, t_re, t_im)
 
-        if self.ablation != "no_pid":
+        if self.ablation not in ("no_pid", "all"):
             h_mod = entity_modality_ids[heads]
             t_mod = entity_modality_ids[tails]
             cross_modal_mask = h_mod != t_mod
@@ -1056,7 +1055,7 @@ class CASCADEKGModel(nn.Module):
 
         base_score = self._complEx_score(h_re, h_im, r_re, r_im, t_re, t_im)
 
-        if self.ablation != "no_pid":
+        if self.ablation not in ("no_pid", "all"):
             h_mod = entity_modality_ids[heads]
             t_mod = entity_modality_ids[tails]
             cross_modal_mask = h_mod != t_mod

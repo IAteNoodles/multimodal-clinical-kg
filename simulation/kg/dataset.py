@@ -14,13 +14,17 @@ from torch.utils.data import Dataset
 
 from simulation.kg.extract_entities import ClinicalKG, Entity, Relation
 
-ENTITY_TYPE_TO_ID = {"Finding": 0, "Anatomy": 1, "Disease": 2, "Patient": 3, "Study": 4, "Drug": 5, "LabResult": 6, "Procedure": 7, "VitalResult": 8, "Unknown": 9}
+ENTITY_TYPE_TO_ID = {
+    "Finding": 0, "Anatomy": 1, "Disease": 2, "Patient": 3,
+    "Study": 4, "Drug": 5, "LabResult": 6, "Procedure": 7, "VitalResult": 8,
+    "ECGMeasurement": 9, "ECGRhythm": 10, "Unknown": 11,
+}
 MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, None: 4}
 
-ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "Unknown"]
+ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "ECGMeasurement", "ECGRhythm", "Unknown"]
 CROSS_MODAL_RELATIONS = {"suggestive_of", "treats", "prevents", "contraindicated", "has_focus", "has_intent", "direct_site"}
 WITHIN_MODAL_RELATIONS = {"located_at", "indicates", "modifies", "subsumes"}
-STRUCTURAL_RELATIONS = {"has_finding", "finding_of", "same_patient"}
+STRUCTURAL_RELATIONS = {"has_finding", "finding_of", "same_patient", "has_study"}
 
 MODALITY_SET_MAP = {
     "text": {"text"},
@@ -393,9 +397,8 @@ class KGTriplesDataset:
                     if len(row) >= 1:
                         orig_eid = int(row[0])
                         if row_idx < features_tensor.shape[0]:
-                            eid_str = str(orig_eid)
-                            if eid_str in self.entity2id:
-                                kg_idx = self.entity2id[eid_str]
+                            if orig_eid in self.id2entity:
+                                kg_idx = orig_eid
                                 id_map[kg_idx] = features_tensor[row_idx]
 
             self._modality_features[file_stem] = id_map
@@ -559,8 +562,8 @@ class MultimodalKGTriplesDataset(KGTriplesDataset):
         batch_triples: torch.LongTensor,
         modalities: Set[str],
     ) -> Dict[str, torch.LongTensor]:
-        heads = batch_triples[:, 0]
-        tails = batch_triples[:, 2]
+        heads = batch_triples[:, 0].long()
+        tails = batch_triples[:, 2].long()
 
         result = {
             "heads": heads,
@@ -728,7 +731,9 @@ class LinkPredictionEvaluator:
     def evaluate(self, model, triples: torch.LongTensor, weights: torch.FloatTensor,
                  batch_size: int = 256, device: str = "cpu",
                  max_triples: Optional[int] = None, num_eval_negatives: int = 50,
-                 return_details: bool = False):
+                 return_details: bool = False,
+                 entity_type_ids: Optional[torch.LongTensor] = None,
+                 entity_modality_ids: Optional[torch.LongTensor] = None):
         model.eval()
         eval_dev = self.device
 
@@ -824,11 +829,10 @@ class LinkPredictionEvaluator:
                 # Score tail candidates
                 tail_heads_exp = heads.unsqueeze(1).expand(-1, max_cands)
                 tail_rels_exp = rels.unsqueeze(1).expand(-1, max_cands)
-                tail_scores = model.score(
-                    tail_heads_exp.reshape(-1),
-                    tail_rels_exp.reshape(-1),
-                    tail_cands.reshape(-1),
-                ).reshape(bsz, max_cands)
+                _score_args = (tail_heads_exp.reshape(-1), tail_rels_exp.reshape(-1), tail_cands.reshape(-1))
+                if entity_type_ids is not None:
+                    _score_args += (entity_type_ids, entity_modality_ids)
+                tail_scores = model.score(*_score_args).reshape(bsz, max_cands)
                 tail_scores[~tail_cand_mask] = float("-inf")
 
                 # --- Vectorized head candidate sampling ---
@@ -862,11 +866,14 @@ class LinkPredictionEvaluator:
                 head_tails_exp = tails.unsqueeze(1).expand(-1, max_cands)
                 # Use original head_cands width for scoring if it differs
                 hc_width = head_cands.size(1) if head_true_pos.max() < head_cands.size(1) else max_cands
-                head_scores = model.score(
+                _score_args2 = (
                     head_cands[:, :hc_width].reshape(-1),
                     rels.unsqueeze(1).expand(-1, hc_width).reshape(-1),
                     tails.unsqueeze(1).expand(-1, hc_width).reshape(-1),
-                ).reshape(bsz, hc_width)
+                )
+                if entity_type_ids is not None:
+                    _score_args2 += (entity_type_ids, entity_modality_ids)
+                head_scores = model.score(*_score_args2).reshape(bsz, hc_width)
                 head_scores[~head_cand_mask[:, :hc_width]] = float("-inf")
 
                 # --- Vectorized filtered ranking using GPU hash keys ---
