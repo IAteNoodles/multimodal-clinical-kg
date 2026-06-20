@@ -728,11 +728,17 @@ class MultimodalCASCADEModel(nn.Module):
         nn.init.xavier_uniform_(self.entity_embeddings.weight)
         nn.init.xavier_uniform_(self.relation_embeddings.weight)
 
+        # Scale auxiliary embeddings to match entity embedding per-element magnitude.
+        # xavier_uniform_ bound depends on num_embeddings (fan_out), so tiny tables
+        # (5 modalities, 12 types) get ~40x larger norms than the 421K entity table.
+        # Using the entity table's bound for all auxiliary embeddings fixes this.
+        _ent_bound = (6.0 / (num_entities + embed_dim * 2)) ** 0.5
+
         self.modality_embeddings = nn.Embedding(num_modalities, embed_dim)
-        nn.init.xavier_uniform_(self.modality_embeddings.weight)
+        nn.init.uniform_(self.modality_embeddings.weight, -_ent_bound, _ent_bound)
 
         self.entity_type_embeddings = nn.Embedding(num_entity_types, embed_dim)
-        nn.init.xavier_uniform_(self.entity_type_embeddings.weight)
+        nn.init.uniform_(self.entity_type_embeddings.weight, -_ent_bound, _ent_bound)
 
         self.has_modality_logit = nn.Parameter(torch.zeros(num_entities, 1))
 

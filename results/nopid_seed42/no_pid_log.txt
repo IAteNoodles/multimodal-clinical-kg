@@ -1,0 +1,49 @@
+device=cuda
+entities=421216 relations=20
+params=216,780,128
+  resumed from ckpts\cascade_fixed_ablation_no_pid\latest.pt (ep=43, step=54094)
+  ep44/1000 starting (1258 batches)
+  bi0 loss=0.4372
+  val MRR=0.8106 H@1=0.7374 H@10=0.9425
+  no improv (3/10) best=0.8214@ep41
+  ep44 done, loss=0.4069
+  ep45/1000 starting (1258 batches)
+  bi0 loss=0.4171
+  val MRR=0.8124 H@1=0.7396 H@10=0.9436
+  no improv (4/10) best=0.8214@ep41
+  ep45 done, loss=0.4072
+  ep46/1000 starting (1258 batches)
+  bi0 loss=0.4189
+  val MRR=0.8134 H@1=0.7411 H@10=0.9436
+  no improv (5/10) best=0.8214@ep41
+  ep46 done, loss=0.4134
+  ep47/1000 starting (1258 batches)
+  bi0 loss=0.4160
+  val MRR=0.8150 H@1=0.7441 H@10=0.9423
+  no improv (6/10) best=0.8214@ep41
+  ep47 done, loss=0.4032
+  ep48/1000 starting (1258 batches)
+  bi0 loss=0.4124
+  val MRR=0.8162 H@1=0.7462 H@10=0.9421
+  no improv (7/10) best=0.8214@ep41
+  ep48 done, loss=0.4066
+  ep49/1000 starting (1258 batches)
+  bi0 loss=0.4107
+  val MRR=0.8176 H@1=0.7481 H@10=0.9421
+  no improv (8/10) best=0.8214@ep41
+  ep49 done, loss=0.3971
+  ep50/1000 starting (1258 batches)
+  bi0 loss=0.4077
+  val MRR=0.8179 H@1=0.7488 H@10=0.9416
+  no improv (9/10) best=0.8214@ep41
+  ep50 done, loss=0.4014
+  ep51/1000 starting (1258 batches)
+  bi0 loss=0.4029
+  val MRR=0.8190 H@1=0.7501 H@10=0.9420
+  no improv (10/10) best=0.8214@ep41
+  early stopping at ep51
+
+  best val MRR=0.8214 at ep41
+
+  running test evaluation...
+  test MRR=0.8216 H@1=0.7548 H@10=0.9400

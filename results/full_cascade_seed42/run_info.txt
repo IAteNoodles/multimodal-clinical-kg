@@ -1,0 +1,3 @@
+Seeds=42  
+ablation=none  
+config=full_cascade_scaled_batch3000 

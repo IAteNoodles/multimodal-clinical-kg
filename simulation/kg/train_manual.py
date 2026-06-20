@@ -200,6 +200,7 @@ def train(args):
     for ep in range(start_ep + 1, args.epochs + 1):
         if done:
             break
+        print(f"  ep{ep}/{args.epochs} starting ({len(train_loader)} batches)", flush=True)
         model.train()
         pbar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"ep{ep}")
         for bi, (batch,) in pbar:
@@ -249,7 +250,9 @@ def train(args):
             if bi == 0 and ep == 1:
                 alloc = torch.cuda.memory_allocated(device) / 1e9
                 reserved = torch.cuda.memory_reserved(device) / 1e9
-                print(f"\n  first step: alloc={alloc:.2f}GB reserved={reserved:.2f}GB")
+                print(f"\n  first step: alloc={alloc:.2f}GB reserved={reserved:.2f}GB", flush=True)
+            if bi == 0:
+                print(f"  bi0 loss={loss.item():.4f}", flush=True)
 
             pbar.set_postfix(loss=f"{loss.item():.4f}")
 
@@ -271,7 +274,7 @@ def train(args):
             )
             ep_metrics.update(val_metrics)
             mrr = val_metrics.get("MRR", 0.0)
-            print(f"  val MRR={mrr:.4f} H@1={val_metrics.get('Hits@1',0):.4f} H@10={val_metrics.get('Hits@10',0):.4f}")
+            print(f"  val MRR={mrr:.4f} H@1={val_metrics.get('Hits@1',0):.4f} H@10={val_metrics.get('Hits@10',0):.4f}", flush=True)
 
             if mrr > best_metric:
                 best_metric = mrr
@@ -314,7 +317,7 @@ def train(args):
 
         gc.collect()
         torch.cuda.empty_cache()
-        print(f"  ep{ep} done, loss={train_loss:.4f}")
+        print(f"  ep{ep} done, loss={train_loss:.4f}", flush=True)
 
     if args.eval:
         if evaluator is None:
