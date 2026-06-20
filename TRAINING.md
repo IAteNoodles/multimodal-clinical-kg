@@ -3,10 +3,24 @@
 ## Setup
 
 ```bash
+# 1. Clone repo
+git clone <repo-url>
+cd MultiModal
+
+# 2. Install Python deps
 pip install -r requirements.txt
+
+# 3. Install CUDA PyTorch (see pytorch.org for your CUDA version)
+pip install torch --index-url https://download.pytorch.org/whl/cu124
 ```
 
-Requires Python >= 3.10 and a CUDA-capable GPU (tested on RTX 4050 6GB).
+Requires Python >= 3.10 and a CUDA-capable GPU with >= 6GB VRAM (tested on RTX 4050 6GB).
+
+## Data
+
+The preprocessed KG data (`simulation/data/kg/clinical_kg_efficient/`) is included in the repo (~100 MB). No raw data downloads needed for training.
+
+For the full multimodal features (CXR, ECG, text, structured — ~5.4 GB, currently unused by the training loop), download from [link TBD].
 
 ## Quick Start
 
@@ -42,7 +56,7 @@ Replace `--ablation` flag with one of:
 
 ## Resume from Crash
 
-Add `--resume` to resume from the latest checkpoint:
+On Windows WDDM, CUDA kernel timeouts (>2s) may crash. Add `--resume` to continue:
 
 ```bash
 python -u simulation/kg/train_manual.py \
@@ -51,4 +65,12 @@ python -u simulation/kg/train_manual.py \
     --resume > log.txt 2>&1
 ```
 
-Results (test metrics, best model weights, training log) are saved under `results/` with seed info.
+## Results
+
+Test metrics, best model weights, and training logs are saved under `results/{config}_seed{seed}/`.
+
+## Known Issues
+
+- **Windows WDDM**: Training may crash every 1-20 epochs due to GPU driver timeout. Kill the hung process and resume with `--resume`.
+- **Expandable Segments**: `expandable_segments:True` not supported on Windows. Default allocator may cause OOM on fragmentation.
+- **First Epoch Slow**: CUDA kernel compilation for the 216M-param model can take several minutes on the first epoch.
