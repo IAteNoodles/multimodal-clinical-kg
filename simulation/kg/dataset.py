@@ -770,7 +770,8 @@ class LinkPredictionEvaluator:
                  return_details: bool = False,
                  entity_type_ids: Optional[torch.LongTensor] = None,
                  entity_modality_ids: Optional[torch.LongTensor] = None,
-                 full_rank: bool = False):
+                 full_rank: bool = False,
+                 full_rank_chunk_size: int = 16384):
         model.eval()
         eval_dev = self.device
 
@@ -857,41 +858,55 @@ class LinkPredictionEvaluator:
                 batch_tail_type_ids = tail_type_ids_all[batch_idx]
 
                 if full_rank:
+                    chunk_size = full_rank_chunk_size
                     all_ents = torch.arange(self.num_entities, device=self.device, dtype=torch.long)
 
-                    h_exp_t = heads.unsqueeze(1).expand(-1, self.num_entities).reshape(-1)
-                    r_exp_t = rels.unsqueeze(1).expand(-1, self.num_entities).reshape(-1)
-                    e_exp_t = all_ents.unsqueeze(0).expand(bsz, -1).reshape(-1)
-                    _score_args_t = (h_exp_t, r_exp_t, e_exp_t)
+                    _gold_args = (heads, rels, tails)
                     if entity_type_ids is not None:
-                        _score_args_t += (entity_type_ids, entity_modality_ids)
-                    t_scores = model.score(*_score_args_t).reshape(bsz, self.num_entities)
+                        _gold_args += (entity_type_ids, entity_modality_ids)
+                    gold = model.score(*_gold_args).clone()
 
-                    t_keys = self._compute_triple_keys(h_exp_t, r_exp_t, e_exp_t)
-                    pos = torch.searchsorted(self.known_triples_keys_sorted, t_keys)
-                    pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
-                    is_known_t = (self.known_triples_keys_sorted[pos] == t_keys).reshape(bsz, self.num_entities)
-                    gold_t = t_scores[torch.arange(bsz, device=self.device), tails].clone()
-                    t_scores[is_known_t] = float("-inf")
-                    t_scores[torch.arange(bsz, device=self.device), tails] = gold_t
-                    tail_ranks = (t_scores > gold_t.unsqueeze(1)).sum(dim=1) + 1
+                    tail_count_better = torch.zeros(bsz, device=self.device, dtype=torch.long)
+                    for c_start in range(0, self.num_entities, chunk_size):
+                        c_end = min(c_start + chunk_size, self.num_entities)
+                        cs = c_end - c_start
+                        e_chunk = all_ents[c_start:c_end]
+                        h_exp = heads.unsqueeze(1).expand(-1, cs).reshape(-1)
+                        r_exp = rels.unsqueeze(1).expand(-1, cs).reshape(-1)
+                        e_exp = e_chunk.unsqueeze(0).expand(bsz, -1).reshape(-1)
+                        _score_args = (h_exp, r_exp, e_exp)
+                        if entity_type_ids is not None:
+                            _score_args += (entity_type_ids, entity_modality_ids)
+                        scores = model.score(*_score_args).reshape(bsz, cs)
+                        keys = self._compute_triple_keys(h_exp, r_exp, e_exp)
+                        pos = torch.searchsorted(self.known_triples_keys_sorted, keys)
+                        pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
+                        is_known = (self.known_triples_keys_sorted[pos] == keys).reshape(bsz, cs)
+                        scores[is_known] = float("-inf")
+                        tail_count_better += (scores > gold.unsqueeze(1)).sum(dim=1)
+                        del scores, is_known, keys, pos
+                    tail_ranks = tail_count_better + 1
 
-                    h_exp_h = all_ents.unsqueeze(0).expand(bsz, -1).reshape(-1)
-                    r_exp_h = rels.unsqueeze(1).expand(-1, self.num_entities).reshape(-1)
-                    t_exp_h = tails.unsqueeze(1).expand(-1, self.num_entities).reshape(-1)
-                    _score_args_h = (h_exp_h, r_exp_h, t_exp_h)
-                    if entity_type_ids is not None:
-                        _score_args_h += (entity_type_ids, entity_modality_ids)
-                    h_scores = model.score(*_score_args_h).reshape(bsz, self.num_entities)
-
-                    h_keys = self._compute_triple_keys(h_exp_h, r_exp_h, t_exp_h)
-                    pos = torch.searchsorted(self.known_triples_keys_sorted, h_keys)
-                    pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
-                    is_known_h = (self.known_triples_keys_sorted[pos] == h_keys).reshape(bsz, self.num_entities)
-                    gold_h = h_scores[torch.arange(bsz, device=self.device), heads].clone()
-                    h_scores[is_known_h] = float("-inf")
-                    h_scores[torch.arange(bsz, device=self.device), heads] = gold_h
-                    head_ranks = (h_scores > gold_h.unsqueeze(1)).sum(dim=1) + 1
+                    head_count_better = torch.zeros(bsz, device=self.device, dtype=torch.long)
+                    for c_start in range(0, self.num_entities, chunk_size):
+                        c_end = min(c_start + chunk_size, self.num_entities)
+                        cs = c_end - c_start
+                        e_chunk = all_ents[c_start:c_end]
+                        e_exp = e_chunk.unsqueeze(0).expand(bsz, -1).reshape(-1)
+                        r_exp = rels.unsqueeze(1).expand(-1, cs).reshape(-1)
+                        t_exp = tails.unsqueeze(1).expand(-1, cs).reshape(-1)
+                        _score_args = (e_exp, r_exp, t_exp)
+                        if entity_type_ids is not None:
+                            _score_args += (entity_type_ids, entity_modality_ids)
+                        scores = model.score(*_score_args).reshape(bsz, cs)
+                        keys = self._compute_triple_keys(e_exp, r_exp, t_exp)
+                        pos = torch.searchsorted(self.known_triples_keys_sorted, keys)
+                        pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
+                        is_known = (self.known_triples_keys_sorted[pos] == keys).reshape(bsz, cs)
+                        scores[is_known] = float("-inf")
+                        head_count_better += (scores > gold.unsqueeze(1)).sum(dim=1)
+                        del scores, is_known, keys, pos
+                    head_ranks = head_count_better + 1
 
                     batch_cross = cross_mask_all[start:end]
                     batch_within = within_mask_all[start:end]
@@ -921,7 +936,7 @@ class LinkPredictionEvaluator:
                             r_id = int(rels_cpu[i])
                             per_triple_data.append({'rank': float(tail_ranks_list[i]), 'head_type': h_type, 'tail_type': t_type, 'relation_id': r_id, 'direction': 'tail'})
                             per_triple_data.append({'rank': float(head_ranks_list[i]), 'head_type': h_type, 'tail_type': t_type, 'relation_id': r_id, 'direction': 'head'})
-                    del t_scores, h_scores
+                    del tail_count_better, head_count_better, gold
                     continue
 
                 # --- Vectorized tail candidate sampling ---

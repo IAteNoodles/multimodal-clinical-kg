@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, torch, gc, json, os, sys, shutil, random
+import argparse, math, torch, gc, json, os, sys, shutil, random
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -8,7 +8,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "garbage_collection_threshold:0.8,max_sp
 import numpy as np
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
 
 from simulation.kg.dataset import (
@@ -191,7 +191,12 @@ def train(args):
         entity_type_ids = entity_modality_ids = None
     n_steps_total = args.epochs * len(train_loader) // args.grad_accum_steps
     warmup_steps = args.warmup_steps
-    sched = CosineAnnealingLR(opt, T_max=n_steps_total)
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            return current_step / max(1, warmup_steps)
+        progress = (current_step - warmup_steps) / max(1, n_steps_total - warmup_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+    sched = LambdaLR(opt, lr_lambda)
 
     evaluator = None  # lazy init on first eval to save GPU memory during training
 
@@ -259,7 +264,10 @@ def train(args):
                     loss = loss + args.n3_weight * (n3_pos + n3_neg) / 2
 
             if args.grad_accum_steps > 0:
+                ep_loss_sum += loss.item()
                 loss = loss / args.grad_accum_steps
+            else:
+                ep_loss_sum += loss.item()
             if scaler:
                 scaler.scale(loss).backward()
             else:
@@ -278,10 +286,6 @@ def train(args):
                 opt.zero_grad(set_to_none=True)
                 global_step += 1
 
-                if args.lr_warmup and global_step < warmup_steps:
-                    for g in opt.param_groups:
-                        g['lr'] = args.lr * min(1.0, (global_step + 1) / warmup_steps)
-
                 if args.clamp_norm > 0 and hasattr(model, 'clamp_embed_norm'):
                     model.clamp_embed_norm(max_norm=args.clamp_norm)
 
@@ -292,7 +296,6 @@ def train(args):
             if bi == 0:
                 print(f"  bi0 loss={loss.item():.4f}", flush=True)
 
-            ep_loss_sum += loss.item()
             ep_loss_count += 1
             pbar.set_postfix(loss=f"{loss.item():.4f}")
 

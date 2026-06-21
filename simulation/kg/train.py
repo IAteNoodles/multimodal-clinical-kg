@@ -47,8 +47,10 @@ from simulation.kg.dataset import (
     LinkPredictionEvaluator,
     NegativeSampler,
     MODALITY_SET_MAP,
+    CROSS_MODAL_RELATIONS,
 )
 from simulation.kg.extract_entities import ClinicalKG, Entity, Relation
+from simulation.kg.inference import load_entity_features
 from simulation.kg.models import (
     CASCADEKGModel,
     ComplExModel,
@@ -417,7 +419,7 @@ def train_model(
     if resume_path is not None:
         ckpt = torch.load(resume_path, map_location=device, weights_only=False)
         if _load_model_state_with_prefix_fallback(model, ckpt['model_state_dict'], resume_path):
-            if 'optimizer_state_dict' in ckpt:
+            if args.resume_optimizer and 'optimizer_state_dict' in ckpt:
                 optimizer.load_state_dict(ckpt['optimizer_state_dict'])
             if 'scheduler_state_dict' in ckpt and 'scheduler' in dir():
                 scheduler.load_state_dict(ckpt['scheduler_state_dict'])
@@ -717,7 +719,7 @@ def train_model(
 
     if args.device == "cuda":
         torch.cuda.empty_cache()
-    test_metrics = evaluate_model(model, dataset, evaluator, split='test', device=args.device, batch_size=args.eval_batch_size, max_triples=args.max_eval_triples, num_eval_negatives=args.eval_negatives)
+    test_metrics = evaluate_model(model, dataset, evaluator, split='test', device=args.device, batch_size=args.eval_batch_size, max_triples=args.max_eval_triples, num_eval_negatives=args.eval_negatives, full_rank=True)
     for k, v in test_metrics.items():
         results[f"test_{k.lower().replace('@', '_')}"] = v
 
@@ -734,6 +736,7 @@ def evaluate_model(
     max_triples: Optional[int] = None,
     num_eval_negatives: int = 50,
     return_details: bool = False,
+    full_rank: bool = False,
 ):
     model.eval()
     dev = torch.device(device) if device is not None else next(model.parameters()).device
@@ -765,7 +768,7 @@ def evaluate_model(
         wrapped = model
 
     try:
-        result = evaluator.evaluate(wrapped, triples, weights, batch_size=batch_size, device=device_str, max_triples=max_triples, num_eval_negatives=num_eval_negatives, return_details=return_details)
+        result = evaluator.evaluate(wrapped, triples, weights, batch_size=batch_size, device=device_str, max_triples=max_triples, num_eval_negatives=num_eval_negatives, return_details=return_details, full_rank=full_rank)
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
             print("[WARN] CUDA OOM during evaluation, falling back to CPU")
@@ -778,7 +781,7 @@ def evaluate_model(
             else:
                 wrapped = model_cpu
             cpu_eval = LinkPredictionEvaluator(dataset, device='cpu')
-            result = cpu_eval.evaluate(wrapped, triples, weights, batch_size=batch_size, device='cpu', max_triples=max_triples, num_eval_negatives=num_eval_negatives, return_details=return_details)
+            result = cpu_eval.evaluate(wrapped, triples, weights, batch_size=batch_size, device='cpu', max_triples=max_triples, num_eval_negatives=num_eval_negatives, return_details=return_details, full_rank=full_rank)
             del model_cpu
             gc.collect()
             model.to(dev)
@@ -849,7 +852,7 @@ def _find_matching_embed_dim(
     return best_dim
 
 
-def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Module:
+def build_model(args: argparse.Namespace, dataset: KGTriplesDataset, feature_dir: Optional[Path] = None) -> nn.Module:
     num_ents = dataset.num_entities
     num_rels = dataset.num_relations
 
@@ -860,7 +863,7 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Modul
             embed_dim = _find_matching_embed_dim(cascade_params, 'transe', num_ents, num_rels)
             matched_params = compute_model_params('transe', num_ents, num_rels, embed_dim)
             print(f"  Param-matched TransE: embed_dim={embed_dim}, params={matched_params:,} (CASCADE ref={cascade_params:,})")
-        return TransEModel(num_ents, num_rels, embed_dim, margin=args.margin, dropout=args.dropout)
+        model = TransEModel(num_ents, num_rels, embed_dim, margin=args.margin, dropout=args.dropout)
     elif args.model == 'complex':
         embed_dim = args.embed_dim
         if args.match_params:
@@ -868,10 +871,10 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Modul
             embed_dim = _find_matching_embed_dim(cascade_params, 'complex', num_ents, num_rels)
             matched_params = compute_model_params('complex', num_ents, num_rels, embed_dim)
             print(f"  Param-matched ComplEx: embed_dim={embed_dim}, params={matched_params:,} (CASCADE ref={cascade_params:,})")
-        return ComplExModel(num_ents, num_rels, embed_dim, dropout=args.dropout)
+        model = ComplExModel(num_ents, num_rels, embed_dim, dropout=args.dropout)
     elif args.model == 'cascade':
         ablation = getattr(args, 'ablation', None)
-        return CASCADEKGModel(
+        model = CASCADEKGModel(
             num_ents, num_rels, args.embed_dim,
             num_entity_types=len(ENTITY_TYPE_TO_ID),
             num_modalities=len(MODALITY_TO_ID),
@@ -880,7 +883,8 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Modul
         )
     elif args.model == 'multimodal_complex':
         modalities = MODALITY_SET_MAP.get(args.modalities, {"text"})
-        return MultimodalComplExModel(
+        cross_modal_rel_ids = [dataset.relation2id[r] for r in CROSS_MODAL_RELATIONS if r in dataset.relation2id]
+        model = MultimodalComplExModel(
             num_ents, num_rels, args.embed_dim,
             num_modalities=len(MODALITY_TO_ID),
             synergy_dim=64,
@@ -889,11 +893,13 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Modul
             use_modality_encoders=args.use_modality_encoders,
             use_pretrained_encoders=False,
             modalities=modalities,
+            cross_modal_relations=cross_modal_rel_ids,
         )
     elif args.model == 'multimodal_cascade':
         modalities = MODALITY_SET_MAP.get(args.modalities, {"text"})
         ablation = getattr(args, 'ablation', None)
-        return MultimodalCASCADEModel(
+        cross_modal_rel_ids = [dataset.relation2id[r] for r in CROSS_MODAL_RELATIONS if r in dataset.relation2id]
+        model = MultimodalCASCADEModel(
             num_ents, num_rels, args.embed_dim,
             num_entity_types=len(ENTITY_TYPE_TO_ID),
             num_modalities=len(MODALITY_TO_ID),
@@ -904,9 +910,19 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Modul
             use_pretrained_encoders=False,
             modalities=modalities,
             ablation=ablation,
+            cross_modal_relations=cross_modal_rel_ids,
         )
     else:
         raise ValueError(f"Unknown model: {args.model}")
+
+    if hasattr(model, 'set_precomputed_features'):
+        if feature_dir is not None:
+            entity_features = load_entity_features(feature_dir, dataset)
+            model.set_precomputed_features(entity_features)
+        else:
+            model.precompute_features = False
+
+    return model
 
 
 def auto_tune_config(
@@ -1479,14 +1495,14 @@ def main() -> None:
                 args.modalities = modalities
                 set_seed(args.seed)
 
-                model = build_model(args, dataset)
+                model = build_model(args, dataset, feature_dir=feature_dir)
                 total_params = sum(p.numel() for p in model.parameters())
                 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
                 mod_display = f"_{modalities}" if model_name in ('multimodal_complex', 'multimodal_cascade') else ""
                 display_name = model_name if ablation is None else f"{model_name}_{ablation}"
                 display_name = f"{display_name}{mod_display}"
-                print(f"\nModel: {display_name} | Total params: {total_params:,} | Trainable: {trainable_params,}")
+                print(f"\nModel: {display_name} | Total params: {total_params:,} | Trainable: {trainable_params:,}")
 
                 model = model.to(args.device)
                 mem_trace(f"after model.to({args.device})", args.device)
@@ -1525,11 +1541,11 @@ def main() -> None:
                 elif args.batch_size > 16:
                     args.batch_size = max(16, args.batch_size // 2)
                     print(f"\n[VRAM] Retry {vram_attempt+1}: bs {old_bs} → {args.batch_size} (shared was {ve.shared_gb:.2f}GB)")
-                elif args.grad_accum > 1:
-                    args.grad_accum = max(1, args.grad_accum // 2)
-                    print(f"\n[VRAM] Retry {vram_attempt+1}: ga unchanged (already min bs/neg), ga {args.grad_accum} (shared was {ve.shared_gb:.2f}GB)")
+                elif args.grad_accum_steps > 1:
+                    args.grad_accum_steps = max(1, args.grad_accum_steps // 2)
+                    print(f"\n[VRAM] Retry {vram_attempt+1}: ga unchanged (already min bs/neg), ga {args.grad_accum_steps} (shared was {ve.shared_gb:.2f}GB)")
                 else:
-                    print(f"\n[VRAM] Cannot reduce further — bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum}")
+                    print(f"\n[VRAM] Cannot reduce further — bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum_steps}")
                     if args.benchmark:
                         all_results[display_name] = {
                             "model": display_name,
@@ -1542,8 +1558,8 @@ def main() -> None:
                 if args.device == 'cuda':
                     torch.cuda.empty_cache()
                 set_seed(args.seed)
-                model = build_model(args, dataset).to(args.device)
-                print(f"[VRAM] Rebuilt model with bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum}")
+                model = build_model(args, dataset, feature_dir=feature_dir).to(args.device)
+                print(f"[VRAM] Rebuilt model with bs={args.batch_size} neg={args.num_negatives} ga={args.grad_accum_steps}")
             except RuntimeError as re_err:
                 if 'out of memory' in str(re_err).lower():
                     if vram_attempt >= max_vram_retries:
@@ -1576,7 +1592,7 @@ def main() -> None:
                     if args.device == 'cuda':
                         torch.cuda.empty_cache()
                     set_seed(args.seed)
-                    model = build_model(args, dataset).to(args.device)
+                    model = build_model(args, dataset, feature_dir=feature_dir).to(args.device)
                     print(f"\n[VRAM] Retry {vram_attempt+1} (OOM): bs {old_bs} → {args.batch_size}, neg {old_neg} → {args.num_negatives}")
                 else:
                     print(f"\nModel {display_name} failed: {re_err}")
@@ -1601,6 +1617,7 @@ def main() -> None:
                 max_triples=args.max_eval_triples,
                 num_eval_negatives=args.eval_negatives,
                 return_details=True,
+                full_rank=True,
             )
             if isinstance(eval_result, tuple):
                 test_metrics, per_triple_data = eval_result
@@ -1615,7 +1632,7 @@ def main() -> None:
         if model_name in ('cascade', 'multimodal_cascade'):
             synergy = model.get_pid_synergy_matrix().detach().cpu().numpy()
             print("\nLearned PID Synergy Weights (modality pairs):")
-            mod_names = ["CXR", "ECG", "RAD", "None"]
+            mod_names = ["CXR", "ECG", "RAD", "STR", "None"]
             header = "        " + "  ".join(f"{n:>8s}" for n in mod_names[:synergy.shape[1]])
             print(header)
             for i, row in enumerate(synergy):
