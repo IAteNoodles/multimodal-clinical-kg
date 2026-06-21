@@ -190,6 +190,7 @@ class Entity:
     modality: str
     label: str
     properties: Dict[str, Any] = field(default_factory=dict)
+    split: Optional[str] = None
 
 
 @dataclass
@@ -198,6 +199,8 @@ class Relation:
     relation: str
     tail: str
     weight: float = 1.0
+    source: Optional[str] = None
+    split: Optional[str] = None
 
 
 @dataclass
@@ -235,9 +238,13 @@ class ClinicalKG:
         """Save KG as numpy arrays + JSON metadata to avoid pickle deserialization overhead."""
         directory.mkdir(parents=True, exist_ok=True)
 
-        ENTITY_TYPE_TO_ID = {"Finding": 0, "Anatomy": 1, "Disease": 2, "Patient": 3, "Study": 4}
-        MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, None: 3}
-        ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study"]
+        ENTITY_TYPE_TO_ID = {
+            "Finding": 0, "Anatomy": 1, "Disease": 2, "Patient": 3,
+            "Study": 4, "Drug": 5, "LabResult": 6, "Procedure": 7, "VitalResult": 8,
+            "ECGMeasurement": 9, "ECGRhythm": 10, "Unknown": 11,
+        }
+        MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, None: 4}
+        ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "ECGMeasurement", "ECGRhythm", "Unknown"]
 
         # Deterministic entity ordering: sort by (type_order, id) — same as KGTriplesDataset.__init__
         sorted_entities = sorted(
@@ -247,7 +254,7 @@ class ClinicalKG:
 
         entity_id_map: Dict[str, int] = {e.id: i for i, e in enumerate(sorted_entities)}
         entity_labels: List[str] = [e.label for e in sorted_entities]
-        entity_type_ids = [ENTITY_TYPE_TO_ID.get(e.type, 0) for e in sorted_entities]
+        entity_type_ids = [ENTITY_TYPE_TO_ID.get(e.type, ENTITY_TYPE_TO_ID["Unknown"]) for e in sorted_entities]
         entity_modality_ids = [MODALITY_TO_ID.get(e.modality if e.modality and e.modality != "None" else None, len(MODALITY_TO_ID) - 1) for e in sorted_entities]
 
         entities_arr = np.array(
@@ -282,7 +289,7 @@ class ClinicalKG:
             "entity_labels": entity_labels,
             "relation_names": all_relation_names,
             "entity_type_names": [ENTITY_TYPE_ORDER[i] if i < len(ENTITY_TYPE_ORDER) else "Unknown" for i in range(len(ENTITY_TYPE_ORDER))],
-            "modality_names": ["CXR", "ECG", "RAD", "None"],
+            "modality_names": ["CXR", "ECG", "RAD", "STR", "None"],
             "entity_type_counts": self.entity_type_counts,
             "relation_type_counts": self.relation_type_counts,
         }
@@ -340,10 +347,13 @@ class ClinicalKG:
 
 
 def _add_entity_if_new(kg: ClinicalKG, eid: str, etype: str, modality: str, label: str,
-                       properties: Optional[Dict[str, Any]] = None) -> Entity:
+                       properties: Optional[Dict[str, Any]] = None, split: Optional[str] = None) -> Entity:
     if eid in kg.entities:
-        return kg.entities[eid]
-    entity = Entity(id=eid, type=etype, modality=modality, label=label, properties=properties or {})
+        existing = kg.entities[eid]
+        if split and existing.split and existing.split != split:
+            existing.split = "shared"
+        return existing
+    entity = Entity(id=eid, type=etype, modality=modality, label=label, properties=properties or {}, split=split)
     kg.add_entity(entity)
     return entity
 
@@ -411,7 +421,6 @@ def extract_chexpert_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFr
         if disease_name:
             dis_id = f"DIS_{disease_name}"
             _add_entity_if_new(kg, dis_id, "Disease", "CXR", disease_name)
-            kg.add_relation(Relation(head=fnd_id, relation="indicates", tail=dis_id, weight=1.0))
 
         for anat in CHEXPERT_TO_ANATOMY.get(label, []):
             anat_id = f"ANAT_{_normalize_anatomy_name(anat)}"
@@ -500,8 +509,6 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
                 if scp_disease_name:
                     scp_dis_id = f"DIS_{scp_disease_name}"
                     _add_entity_if_new(kg, scp_dis_id, "Disease", "ECG", scp_disease_name)
-                    kg.add_relation(Relation(head=fnd_id, relation="indicates",
-                                             tail=scp_dis_id, weight=1.0))
 
                 anats = SCP_TO_ANATOMY.get(code_str, [])
                 for anat in anats:
@@ -533,8 +540,6 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
                 if scp_disease_name:
                     scp_dis_id = f"DIS_{scp_disease_name}"
                     _add_entity_if_new(kg, scp_dis_id, "Disease", "ECG", scp_disease_name)
-                    kg.add_relation(Relation(head=fnd_id, relation="indicates",
-                                             tail=scp_dis_id, weight=1.0))
 
     for anat in ECG_ANATOMY:
         _add_entity_if_new(kg, f"ANAT_{_normalize_anatomy_name(anat)}", "Anatomy", "ECG", _normalize_anatomy_name(anat))
@@ -544,7 +549,7 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
     return df, patient_findings
 
 
-def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, List[Dict]]:
+def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, Dict[str, List[Dict]]]:
     radgraph_dir = (data_dir / "radgraph" /
                     "radgraph-extracting-clinical-entities-and-relations-from-radiology-reports-1.0.0")
     if not radgraph_dir.exists():
@@ -552,7 +557,7 @@ def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, List[
         return {}
 
     print("Loading RadGraph data...")
-    all_annotations: Dict[str, List[Dict]] = {}
+    all_annotations: Dict[str, Dict[str, List[Dict]]] = {}
 
     for split_file in ['train.json', 'dev.json', 'test.json']:
         fpath = radgraph_dir / split_file
@@ -561,6 +566,9 @@ def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, List[
         print(f"  Parsing {split_file}...")
         with open(fpath, 'r') as f:
             data = json.load(f)
+
+        split_name = split_file.replace('.json', '')
+        all_annotations.setdefault(split_name, {})
 
         for doc_key, doc_data in data.items():
             entities_list = []
@@ -581,11 +589,11 @@ def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, List[
 
                 if ent.get('label') in ('OBS-DP', 'OBS-DA'):
                     fnd_id = f"FND_RAD_{ent['tokens'].lower()}"
-                    _add_entity_if_new(kg, fnd_id, "Finding", "RAD", ent['tokens'].lower())
+                    _add_entity_if_new(kg, fnd_id, "Finding", "RAD", ent['tokens'].lower(), split=split_name)
 
                 elif ent.get('label') == 'ANAT-DP':
                     anat_id = f"ANAT_{_normalize_anatomy_name(ent['tokens'])}"
-                    _add_entity_if_new(kg, anat_id, "Anatomy", "RAD", _normalize_anatomy_name(ent['tokens']))
+                    _add_entity_if_new(kg, anat_id, "Anatomy", "RAD", _normalize_anatomy_name(ent['tokens']), split=split_name)
 
             doc_relations = doc_data.get('relations', {})
             for rel_id, rel in doc_relations.items():
@@ -605,7 +613,7 @@ def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, List[
                         fnd_id = f"FND_RAD_{src_ent['tokens'].lower()}"
                         anat_id = f"ANAT_{_normalize_anatomy_name(tgt_ent['tokens'])}"
                         kg.add_relation(Relation(head=fnd_id, relation="located_at",
-                                                 tail=anat_id, weight=1.0))
+                                                 tail=anat_id, weight=1.0, split=split_name))
 
                 elif rel_type == 'modify' and obj1 in doc_entities and obj2 in doc_entities:
                     src_ent = doc_entities[obj1]
@@ -614,9 +622,9 @@ def extract_radgraph_findings(kg: ClinicalKG, data_dir: Path) -> Dict[str, List[
                         src_id = f"FND_RAD_{src_ent['tokens'].lower()}"
                         tgt_id = f"FND_RAD_{tgt_ent['tokens'].lower()}"
                         kg.add_relation(Relation(head=src_id, relation="modifies",
-                                                 tail=tgt_id, weight=1.0))
+                                                 tail=tgt_id, weight=1.0, split=split_name))
 
-            all_annotations[doc_key] = entities_list + relations_list
+            all_annotations[split_name][doc_key] = entities_list + relations_list
 
     for graph_file in ['MIMIC-CXR_graphs.json', 'CheXpert_graphs.json']:
         fpath = radgraph_dir / graph_file
@@ -947,10 +955,9 @@ def build_cross_modal_edges(kg: ClinicalKG, chexpert_df: pd.DataFrame, data_dir:
             if pmi > 0.5:
                 norm_pmi = max(0.0, min(1.0, pmi / 3.0))
                 if cxr_id in kg.entities and ecg_id in kg.entities:
-                    kg.add_relation(Relation(head=cxr_id, relation="suggestive_of",
-                                             tail=ecg_id, weight=norm_pmi))
-                    kg.add_relation(Relation(head=ecg_id, relation="suggestive_of",
-                                             tail=cxr_id, weight=norm_pmi))
+                    src, tgt = (cxr_id, ecg_id) if cxr_id <= ecg_id else (ecg_id, cxr_id)
+                    kg.add_relation(Relation(head=src, relation="suggestive_of",
+                                             tail=tgt, weight=norm_pmi))
                     pmi_edges += 1
 
         print(f"  Added {pmi_edges} suggestive_of edges (PMI-based)")
@@ -981,12 +988,10 @@ def _add_clinical_knowledge_edges(kg: ClinicalKG) -> None:
         # Skip if a suggestive_of edge already exists in either direction
         if (source_id, ecg_id) in existing_suggestive or (ecg_id, source_id) in existing_suggestive:
             continue
-        kg.add_relation(Relation(head=source_id, relation="suggestive_of",
-                                 tail=ecg_id, weight=weight))
-        kg.add_relation(Relation(head=ecg_id, relation="suggestive_of",
-                                 tail=source_id, weight=weight))
-        existing_suggestive.add((source_id, ecg_id))
-        existing_suggestive.add((ecg_id, source_id))
+        src, tgt = (source_id, ecg_id) if source_id <= ecg_id else (ecg_id, source_id)
+        kg.add_relation(Relation(head=src, relation="suggestive_of",
+                                 tail=tgt, weight=weight))
+        existing_suggestive.add((src, tgt))
         clinical_edges_added += 1
 
     print(f"  Added {clinical_edges_added} suggestive_of edges (clinical knowledge fallback)")
@@ -1052,13 +1057,11 @@ def _add_disease_mediated_edges(kg: ClinicalKG) -> None:
                 for fid1 in unique_f1:
                     for fid2 in unique_f2:
                         if (fid1, fid2) not in existing_edges and (fid2, fid1) not in existing_edges:
-                            kg.add_relation(Relation(head=fid1, relation="suggestive_of",
-                                                      tail=fid2, weight=0.5))
-                            kg.add_relation(Relation(head=fid2, relation="suggestive_of",
-                                                      tail=fid1, weight=0.5))
-                            existing_edges.add((fid1, fid2))
-                            existing_edges.add((fid2, fid1))
-                            new_edges += 2
+                            src, tgt = (fid1, fid2) if fid1 <= fid2 else (fid2, fid1)
+                            kg.add_relation(Relation(head=src, relation="suggestive_of",
+                                                      tail=tgt, weight=0.5))
+                            existing_edges.add((src, tgt))
+                            new_edges += 1
 
     print(f"  Disease-mediated suggestive_of edges added: {new_edges}")
 

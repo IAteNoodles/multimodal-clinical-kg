@@ -62,8 +62,6 @@ class KGTriplesDataset:
             if rel.head in self.entity2id and rel.tail in self.entity2id
         ]
 
-        inverse_rel_map = self._build_inverse_map()
-
         self._known_triples_set: Set[Tuple[int, int, int]] = {(h, r, t) for h, r, t, _ in triples_data}
 
         self._hr_to_tails: Dict[Tuple[int, int], Set[int]] = defaultdict(set)
@@ -73,16 +71,9 @@ class KGTriplesDataset:
             self._rt_to_heads[(r, t)].add(h)
 
         all_triples = torch.tensor(triples_data, dtype=torch.float32)
-        indices = torch.randperm(len(all_triples), generator=torch.Generator().manual_seed(seed))
-        all_triples = all_triples[indices]
-
-        n = len(all_triples)
-        n_train = int(n * split_ratio[0])
-        n_val = int(n * split_ratio[1])
-
-        self.train_triples = all_triples[:n_train]
-        self.val_triples = all_triples[n_train:n_train + n_val]
-        self.test_triples = all_triples[n_train + n_val:]
+        self.train_triples, self.val_triples, self.test_triples = self._inverse_aware_split(
+            all_triples, split_ratio, seed
+        )
 
         self._entity_type_by_id: Dict[int, str] = {i: e.type for i, e in enumerate(sorted_entities)}
         self._entity_modality_by_id: Dict[int, Optional[str]] = {
@@ -164,16 +155,6 @@ class KGTriplesDataset:
             _rt_to_heads[(r, t)].add(h)
 
         all_triples = torch.tensor(np.column_stack([triples_data, weights]), dtype=torch.float32)
-        indices = torch.randperm(len(all_triples), generator=torch.Generator().manual_seed(seed))
-        all_triples = all_triples[indices]
-
-        n = len(all_triples)
-        n_train = int(n * split_ratio[0])
-        n_val = int(n * split_ratio[1])
-
-        train_triples = all_triples[:n_train]
-        val_triples = all_triples[n_train:n_train + n_val]
-        test_triples = all_triples[n_train + n_val:]
 
         _relation_names_by_id: Dict[int, str] = dict(id2relation)
 
@@ -185,9 +166,9 @@ class KGTriplesDataset:
         obj._known_triples_set = _known_triples_set
         obj._hr_to_tails = _hr_to_tails
         obj._rt_to_heads = _rt_to_heads
-        obj.train_triples = train_triples
-        obj.val_triples = val_triples
-        obj.test_triples = test_triples
+        obj.train_triples, obj.val_triples, obj.test_triples = obj._inverse_aware_split(
+            all_triples, split_ratio, seed
+        )
         obj._entity_type_by_id = _entity_type_by_id
         obj._entity_modality_by_id = _entity_modality_by_id
         obj._entity_ids_by_type = _entity_ids_by_type
@@ -199,7 +180,62 @@ class KGTriplesDataset:
         return {
             "has_finding": "finding_of",
             "finding_of": "has_finding",
+            "before": "after",
+            "after": "before",
+            "same_patient": "same_patient",
         }
+
+    def _inverse_aware_split(
+        self,
+        all_triples: torch.Tensor,
+        split_ratio: Tuple[float, float, float],
+        seed: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        inv_rel_id: Dict[int, int] = {}
+        for r_name, r_inv_name in self._build_inverse_map().items():
+            if r_name in self.relation2id and r_inv_name in self.relation2id:
+                inv_rel_id[self.relation2id[r_name]] = self.relation2id[r_inv_name]
+
+        E = self.num_entities
+        R = self.num_relations
+
+        triples_np = all_triples[:, :3].long().numpy()
+        h = triples_np[:, 0].astype(np.int64)
+        r = triples_np[:, 1].astype(np.int64)
+        t = triples_np[:, 2].astype(np.int64)
+
+        own_key = h * (R * E) + r * E + t
+
+        r_inv_arr = np.full(R, -1, dtype=np.int64)
+        for rid, rid_inv in inv_rel_id.items():
+            r_inv_arr[rid] = rid_inv
+        r_inv_for_each = r_inv_arr[r]
+        has_inv = r_inv_for_each >= 0
+
+        twin_key = np.where(
+            has_inv,
+            t * (R * E) + r_inv_for_each * E + h,
+            own_key,
+        )
+        group_key = np.minimum(own_key, twin_key)
+
+        unique_groups, inverse = np.unique(group_key, return_inverse=True)
+        n_groups = len(unique_groups)
+
+        perm = torch.randperm(n_groups, generator=torch.Generator().manual_seed(seed)).numpy()
+        n_train_g = int(n_groups * split_ratio[0])
+        n_val_g = int(n_groups * split_ratio[1])
+
+        group_split = np.full(n_groups, 2, dtype=np.int64)
+        group_split[perm[:n_train_g]] = 0
+        group_split[perm[n_train_g:n_train_g + n_val_g]] = 1
+
+        triple_split = group_split[inverse]
+
+        train_triples = all_triples[torch.from_numpy(triple_split == 0)]
+        val_triples = all_triples[torch.from_numpy(triple_split == 1)]
+        test_triples = all_triples[torch.from_numpy(triple_split == 2)]
+        return train_triples, val_triples, test_triples
 
     @property
     def num_entities(self) -> int:
@@ -390,19 +426,29 @@ class KGTriplesDataset:
             features_tensor = torch.from_numpy(features_np).float()
 
             id_map: Dict[int, torch.Tensor] = {}
+            skipped = 0
             with open(id_path, 'r') as f:
                 reader = csv.reader(f)
                 header = next(reader, None)
                 for row_idx, row in enumerate(reader):
-                    if len(row) >= 1:
-                        orig_eid = int(row[0])
-                        if row_idx < features_tensor.shape[0]:
-                            if orig_eid in self.id2entity:
-                                kg_idx = orig_eid
-                                id_map[kg_idx] = features_tensor[row_idx]
+                    if len(row) < 1 or row_idx >= features_tensor.shape[0]:
+                        continue
+                    entity_name = row[0]
+                    kg_id = self.entity2id.get(entity_name)
+                    if kg_id is None:
+                        for prefix in ("STY_", "PAT_PTB", "PAT_"):
+                            kg_id = self.entity2id.get(f"{prefix}{entity_name}")
+                            if kg_id is not None:
+                                break
+                    if kg_id is None:
+                        skipped += 1
+                        continue
+                    id_map[kg_id] = features_tensor[row_idx]
 
             self._modality_features[file_stem] = id_map
             print(f"  Loaded {len(id_map)} {mod_name} features (dim={features_tensor.shape[1]})")
+            if skipped > 0:
+                print(f"[WARN] Skipped {skipped} {mod_name} feature rows with unmapped entity IDs")
 
         self._build_modality_padded_tensors()
 
@@ -520,16 +566,6 @@ class MultimodalKGTriplesDataset(KGTriplesDataset):
             _rt_to_heads[(r, t)].add(h)
 
         all_triples = torch.tensor(np.column_stack([triples_data, weights]), dtype=torch.float32)
-        indices = torch.randperm(len(all_triples), generator=torch.Generator().manual_seed(seed))
-        all_triples = all_triples[indices]
-
-        n = len(all_triples)
-        n_train = int(n * split_ratio[0])
-        n_val = int(n * split_ratio[1])
-
-        train_triples = all_triples[:n_train]
-        val_triples = all_triples[n_train:n_train + n_val]
-        test_triples = all_triples[n_train + n_val:]
 
         _relation_names_by_id: Dict[int, str] = dict(id2relation)
 
@@ -541,9 +577,9 @@ class MultimodalKGTriplesDataset(KGTriplesDataset):
         obj._known_triples_set = _known_triples_set
         obj._hr_to_tails = _hr_to_tails
         obj._rt_to_heads = _rt_to_heads
-        obj.train_triples = train_triples
-        obj.val_triples = val_triples
-        obj.test_triples = test_triples
+        obj.train_triples, obj.val_triples, obj.test_triples = obj._inverse_aware_split(
+            all_triples, split_ratio, seed
+        )
         obj._entity_type_by_id = _entity_type_by_id
         obj._entity_modality_by_id = _entity_modality_by_id
         obj._entity_ids_by_type = _entity_ids_by_type
@@ -733,7 +769,8 @@ class LinkPredictionEvaluator:
                  max_triples: Optional[int] = None, num_eval_negatives: int = 50,
                  return_details: bool = False,
                  entity_type_ids: Optional[torch.LongTensor] = None,
-                 entity_modality_ids: Optional[torch.LongTensor] = None):
+                 entity_modality_ids: Optional[torch.LongTensor] = None,
+                 full_rank: bool = False):
         model.eval()
         eval_dev = self.device
 
@@ -818,6 +855,72 @@ class LinkPredictionEvaluator:
                 tails = tails_all[batch_idx]
                 batch_head_type_ids = head_type_ids_all[batch_idx]
                 batch_tail_type_ids = tail_type_ids_all[batch_idx]
+
+                if full_rank:
+                    all_ents = torch.arange(self.num_entities, device=self.device, dtype=torch.long)
+
+                    h_exp_t = heads.unsqueeze(1).expand(-1, self.num_entities).reshape(-1)
+                    r_exp_t = rels.unsqueeze(1).expand(-1, self.num_entities).reshape(-1)
+                    e_exp_t = all_ents.unsqueeze(0).expand(bsz, -1).reshape(-1)
+                    _score_args_t = (h_exp_t, r_exp_t, e_exp_t)
+                    if entity_type_ids is not None:
+                        _score_args_t += (entity_type_ids, entity_modality_ids)
+                    t_scores = model.score(*_score_args_t).reshape(bsz, self.num_entities)
+
+                    t_keys = self._compute_triple_keys(h_exp_t, r_exp_t, e_exp_t)
+                    pos = torch.searchsorted(self.known_triples_keys_sorted, t_keys)
+                    pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
+                    is_known_t = (self.known_triples_keys_sorted[pos] == t_keys).reshape(bsz, self.num_entities)
+                    t_scores[is_known_t] = float("-inf")
+                    true_t_scores = t_scores[torch.arange(bsz, device=self.device), tails]
+                    tail_ranks = (t_scores > true_t_scores.unsqueeze(1)).sum(dim=1) + 1
+
+                    h_exp_h = all_ents.unsqueeze(0).expand(bsz, -1).reshape(-1)
+                    r_exp_h = rels.unsqueeze(1).expand(-1, self.num_entities).reshape(-1)
+                    t_exp_h = tails.unsqueeze(1).expand(-1, self.num_entities).reshape(-1)
+                    _score_args_h = (h_exp_h, r_exp_h, t_exp_h)
+                    if entity_type_ids is not None:
+                        _score_args_h += (entity_type_ids, entity_modality_ids)
+                    h_scores = model.score(*_score_args_h).reshape(bsz, self.num_entities)
+
+                    h_keys = self._compute_triple_keys(h_exp_h, r_exp_h, t_exp_h)
+                    pos = torch.searchsorted(self.known_triples_keys_sorted, h_keys)
+                    pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
+                    is_known_h = (self.known_triples_keys_sorted[pos] == h_keys).reshape(bsz, self.num_entities)
+                    h_scores[is_known_h] = float("-inf")
+                    true_h_scores = h_scores[torch.arange(bsz, device=self.device), heads]
+                    head_ranks = (h_scores > true_h_scores.unsqueeze(1)).sum(dim=1) + 1
+
+                    batch_cross = cross_mask_all[start:end]
+                    batch_within = within_mask_all[start:end]
+                    batch_struct = struct_mask_all[start:end]
+                    tail_ranks_cpu = tail_ranks.cpu()
+                    head_ranks_cpu = head_ranks.cpu()
+                    tail_ranks_list = tail_ranks_cpu.tolist()
+                    head_ranks_list = head_ranks_cpu.tolist()
+                    batch_head_type_cpu = batch_head_type_ids.cpu()
+                    batch_tail_type_cpu = batch_tail_type_ids.cpu()
+                    rels_cpu = rels.cpu()
+                    for i in range(bsz):
+                        all_ranks.append(float(tail_ranks_list[i]))
+                        all_ranks.append(float(head_ranks_list[i]))
+                        if batch_cross[i]:
+                            cross_ranks.append(float(tail_ranks_list[i]))
+                            cross_ranks.append(float(head_ranks_list[i]))
+                        elif batch_within[i]:
+                            within_ranks.append(float(tail_ranks_list[i]))
+                            within_ranks.append(float(head_ranks_list[i]))
+                        elif batch_struct[i]:
+                            struct_ranks.append(float(tail_ranks_list[i]))
+                            struct_ranks.append(float(head_ranks_list[i]))
+                        if return_details:
+                            h_type = int(batch_head_type_cpu[i])
+                            t_type = int(batch_tail_type_cpu[i])
+                            r_id = int(rels_cpu[i])
+                            per_triple_data.append({'rank': float(tail_ranks_list[i]), 'head_type': h_type, 'tail_type': t_type, 'relation_id': r_id, 'direction': 'tail'})
+                            per_triple_data.append({'rank': float(head_ranks_list[i]), 'head_type': h_type, 'tail_type': t_type, 'relation_id': r_id, 'direction': 'head'})
+                    del t_scores, h_scores
+                    continue
 
                 # --- Vectorized tail candidate sampling ---
                 tail_cands, tail_cand_mask, tail_true_pos = self._vectorized_sample_candidates(

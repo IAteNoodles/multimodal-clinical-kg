@@ -67,14 +67,12 @@ def detect_model_type(state_dict: Dict[str, torch.Tensor]) -> str:
     keys = set(state_dict.keys())
     raw_keys = set(k.replace("_orig_mod.", "") for k in keys)
 
+    if "entity_type_embeddings.weight" in raw_keys:
+        if any("cross_modal_attn" in k for k in raw_keys):
+            return "multimodal_cascade"
+        return "cascade"
     if "has_modality_logit" in raw_keys:
         return "multimodal_complex"
-    if any("cross_modal_attn" in k for k in raw_keys):
-        return "multimodal_cascade"
-    if "pid_synergy_raw" in raw_keys:
-        return "cascade"
-    if "modality_embeddings.weight" in raw_keys:
-        return "cascade"
 
     ent_shape = state_dict.get("entity_embeddings.weight").shape
     rel_shape = state_dict.get("relation_embeddings.weight").shape
@@ -101,10 +99,12 @@ def build_model_from_checkpoint(
     checkpoint_path: str,
     device: str,
 ) -> Tuple[nn.Module, str, dict]:
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    raw_sd = ckpt.get("model_state_dict", ckpt)
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    raw_sd = ckpt.get("model_state_dict", ckpt.get("model", ckpt))
     state_dict = strip_orig_mod_prefix(raw_sd)
-    model_type = detect_model_type(state_dict)
+    model_type = ckpt.get("model_type")
+    if model_type is None:
+        model_type = detect_model_type(state_dict)
     embed_dim = detect_embed_dim(state_dict, model_type)
 
     num_ents = state_dict["entity_embeddings.weight"].shape[0]
@@ -115,30 +115,37 @@ def build_model_from_checkpoint(
     elif model_type == "complex":
         model = ComplExModel(num_ents, num_rels, embed_dim)
     elif model_type == "cascade":
+        num_entity_types = state_dict["entity_type_embeddings.weight"].shape[0]
+        num_modalities = state_dict["modality_embeddings.weight"].shape[0]
         model = CASCADEKGModel(
             num_ents, num_rels, embed_dim,
-            num_entity_types=5,
-            num_modalities=4,
+            num_entity_types=num_entity_types,
+            num_modalities=num_modalities,
         )
     elif model_type == "multimodal_complex":
+        num_modalities = state_dict["modality_embeddings.weight"].shape[0]
+        synergy_dim = state_dict["synergy_proj.weight"].shape[1]
         model = MultimodalComplExModel(
             num_ents, num_rels, embed_dim,
-            num_modalities=4,
-            synergy_dim=64,
+            num_modalities=num_modalities,
+            synergy_dim=synergy_dim,
             num_heads=4,
         )
     elif model_type == "multimodal_cascade":
+        num_entity_types = state_dict["entity_type_embeddings.weight"].shape[0]
+        num_modalities = state_dict["modality_embeddings.weight"].shape[0]
+        synergy_dim = state_dict["synergy_proj.weight"].shape[1]
         model = MultimodalCASCADEModel(
             num_ents, num_rels, embed_dim,
-            num_entity_types=5,
-            num_modalities=4,
-            synergy_dim=64,
+            num_entity_types=num_entity_types,
+            num_modalities=num_modalities,
+            synergy_dim=synergy_dim,
             num_heads=4,
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
-    model.load_state_dict(state_dict, strict=False)
+    model.load_state_dict(state_dict, strict=True)
     model.to(device)
     model.eval()
 
@@ -163,16 +170,35 @@ def load_entity_features(
         features_np = np.load(feat_file)
         features_tensor = torch.from_numpy(features_np).float()
 
+        matched = 0
+        total = 0
         with open(id_file, "r") as f:
             reader = csv.reader(f)
             next(reader, None)
             for row_idx, row in enumerate(reader):
-                if len(row) >= 1 and row_idx < features_tensor.shape[0]:
-                    eid = int(row[0])
-                    feat = features_tensor[row_idx]
-                    if eid not in entity_features:
-                        entity_features[eid] = {}
-                    entity_features[eid][mod_name] = feat
+                if len(row) < 1 or row_idx >= features_tensor.shape[0]:
+                    continue
+                total += 1
+                entity_name = row[0]
+                kg_id = dataset.entity2id.get(entity_name)
+                if kg_id is None:
+                    for prefix in ("STY_", "PAT_PTB", "PAT_"):
+                        kg_id = dataset.entity2id.get(f"{prefix}{entity_name}")
+                        if kg_id is not None:
+                            break
+                if kg_id is None:
+                    continue
+                matched += 1
+                feat = features_tensor[row_idx]
+                if kg_id not in entity_features:
+                    entity_features[kg_id] = {}
+                entity_features[kg_id][mod_name] = feat
+
+        if total > 0:
+            coverage = matched / total
+            print(f"  [{mod_name}] feature coverage: {matched}/{total} ({coverage:.1%})")
+            if coverage < 0.5:
+                print(f"  WARNING: low feature coverage for {mod_name} — check entity ID mapping")
 
     return entity_features
 

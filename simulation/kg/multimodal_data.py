@@ -226,7 +226,10 @@ class StructuredDataBuilder:
         d_labitems = pd.read_csv(MIMIC_DEMO_DIR / "hosp" / "d_labitems.csv.gz")
         icustays = pd.read_csv(MIMIC_DEMO_DIR / "icu" / "icustays.csv.gz")
         patient_ids = sorted(patients["subject_id"].unique())
-        patient_id_to_idx = {pid: i for i, pid in enumerate(patients["subject_id"])}
+        dup_count = int(patients["subject_id"].duplicated(keep="first").sum())
+        if dup_count:
+            print(f"[Structured] WARNING: {dup_count} duplicate subject_id rows; deduplicating")
+        patient_id_to_idx = {pid: i for i, pid in enumerate(patient_ids)}
         n_patients = len(patient_ids)
         demo_features = np.zeros((n_patients, 3), dtype=np.float32)
         for _, row in patients.iterrows():
@@ -363,7 +366,7 @@ class ModalityFeatureStore:
             for _, row in self._text_df.iterrows():
                 sid = row["study_id"]
                 if pd.notna(sid):
-                    key = f"study_{int(sid)}"
+                    key = f"STY_{int(sid)}"
                     if key not in self._modality_index:
                         self._modality_index[key] = []
                     if "text" not in self._modality_index[key]:
@@ -372,7 +375,7 @@ class ModalityFeatureStore:
             for _, row in self._cxr_df.iterrows():
                 sid = row["study_id"]
                 if pd.notna(sid):
-                    key = f"study_{int(sid)}"
+                    key = f"STY_{int(sid)}"
                     if key not in self._modality_index:
                         self._modality_index[key] = []
                     if "image" not in self._modality_index[key]:
@@ -381,7 +384,7 @@ class ModalityFeatureStore:
             for _, row in self._ecg_df.iterrows():
                 pid = row["patient_id"]
                 if pd.notna(pid):
-                    key = f"patient_{int(pid)}"
+                    key = f"PAT_PTB{int(pid)}"
                     if key not in self._modality_index:
                         self._modality_index[key] = []
                     if "ecg" not in self._modality_index[key]:
@@ -390,14 +393,14 @@ class ModalityFeatureStore:
             for _, row in self._ecg_demo_df.iterrows():
                 pid = row["subject_id"]
                 if pd.notna(pid):
-                    key = "patient_{}".format(int(pid))
+                    key = "PAT_{}".format(int(pid))
                     if key not in self._modality_index:
                         self._modality_index[key] = []
                     if "ecg" not in self._modality_index[key]:
                         self._modality_index[key].append("ecg")
         if self._structured_pids is not None:
             for pid in self._structured_pids:
-                key = "patient_{}".format(int(pid))
+                key = "PAT_{}".format(int(pid))
                 if key not in self._modality_index:
                     self._modality_index[key] = []
                 if "structured" not in self._modality_index[key]:

@@ -198,8 +198,16 @@ def set_seed(seed: int) -> None:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
     except Exception:
         pass
+
+
+def _worker_init_fn(worker_id: int) -> None:
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 class CASCADEWrapper(nn.Module):
@@ -322,7 +330,6 @@ def train_model(
         # Cap the allocator BEFORE calibration so the probe steps OOM-and-shrink
         # instead of spilling into shared GPU memory.
         _enforce_vram_ceiling(args, device)
-        torch.backends.cudnn.benchmark = True
 
     high_lr_params = []
     base_params = []
@@ -354,6 +361,8 @@ def train_model(
 
     train_triples, train_weights = dataset.get_train_triples()
     train_dataset = TensorDataset(train_triples)
+    train_gen = torch.Generator()
+    train_gen.manual_seed(args.seed)
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -363,6 +372,8 @@ def train_model(
         persistent_workers=(args.num_workers > 0),
         prefetch_factor=2 if args.num_workers > 0 else None,
         drop_last=True,
+        generator=train_gen,
+        worker_init_fn=_worker_init_fn,
     )
     val_triples, val_weights = dataset.get_val_triples()
 
@@ -443,12 +454,16 @@ def train_model(
             args.grad_accum_steps = cal['grad_accum_steps']
             args.eval_batch_size = cal['eval_batch_size']
             neg_sampler = NegativeSampler(dataset, num_negatives=args.num_negatives, device=device)
+            train_gen = torch.Generator()
+            train_gen.manual_seed(args.seed)
             train_loader = DataLoader(
                 train_dataset, batch_size=args.batch_size, shuffle=True,
                 num_workers=args.num_workers, pin_memory=True,
                 persistent_workers=(args.num_workers > 0),
                 prefetch_factor=2 if args.num_workers > 0 else None,
                 drop_last=True,
+                generator=train_gen,
+                worker_init_fn=_worker_init_fn,
             )
             warmup_steps = getattr(args, 'warmup_steps', 0)
             total_steps = ((train_triples.size(0) + args.batch_size - 1) // args.batch_size // args.grad_accum_steps) * args.epochs
@@ -854,7 +869,7 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset) -> nn.Modul
             matched_params = compute_model_params('complex', num_ents, num_rels, embed_dim)
             print(f"  Param-matched ComplEx: embed_dim={embed_dim}, params={matched_params:,} (CASCADE ref={cascade_params:,})")
         return ComplExModel(num_ents, num_rels, embed_dim, dropout=args.dropout)
-    el    if args.model == 'cascade':
+    elif args.model == 'cascade':
         ablation = getattr(args, 'ablation', None)
         return CASCADEKGModel(
             num_ents, num_rels, args.embed_dim,

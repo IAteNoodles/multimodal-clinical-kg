@@ -179,7 +179,7 @@ class ModalityEncoder(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.AdaptiveAvgPool2d(1),
                 nn.Flatten(),
-                nn.Linear(64, 512),
+                nn.Linear(64, self.MODALITY_DIM["cxr"]),
             )
 
     def _build_ecg_encoder(self) -> nn.Module:
@@ -219,8 +219,6 @@ class ModalityEncoder(nn.Module):
         )
 
     def encode_cxr(self, images: FloatTensor) -> FloatTensor:
-        if self.precompute and "cxr" in self._precomputed:
-            return self._precomputed["cxr"]
         x = images
         if x.dim() == 3:
             x = x.unsqueeze(1)
@@ -229,39 +227,25 @@ class ModalityEncoder(nn.Module):
         elif x.shape[1] != 3:
             x = x[:, :3]
         feat = self.cxr_encoder(x).flatten(1)
-        if self.precompute:
-            self._precomputed["cxr"] = feat.detach()
         return feat
 
     def encode_ecg(self, waveforms: FloatTensor) -> FloatTensor:
-        if self.precompute and "ecg" in self._precomputed:
-            return self._precomputed["ecg"]
         x = waveforms
         if x.dim() == 2:
             x = x.unsqueeze(1)
         feat = self.ecg_encoder(x).flatten(1)
-        if self.precompute:
-            self._precomputed["ecg"] = feat.detach()
         return feat
 
     def encode_text(self, input_ids: LongTensor, attention_mask: LongTensor | None = None) -> FloatTensor:
-        if self.precompute and "text" in self._precomputed:
-            return self._precomputed["text"]
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
         out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
         cls = out.last_hidden_state[:, 0]
         feat = self.text_proj(cls)
-        if self.precompute:
-            self._precomputed["text"] = feat.detach()
         return feat
 
     def encode_structured(self, features: FloatTensor) -> FloatTensor:
-        if self.precompute and "structured" in self._precomputed:
-            return self._precomputed["structured"]
         feat = self.structured_encoder(features)
-        if self.precompute:
-            self._precomputed["structured"] = feat.detach()
         return feat
 
     def precompute_all(
@@ -276,13 +260,21 @@ class ModalityEncoder(nn.Module):
         self._precomputed = {}
         results = {}
         if cxr_images is not None:
-            results["cxr"] = self.encode_cxr(cxr_images)
+            feat = self.encode_cxr(cxr_images).detach()
+            results["cxr"] = feat
+            self._precomputed["cxr"] = feat
         if ecg_waveforms is not None:
-            results["ecg"] = self.encode_ecg(ecg_waveforms)
+            feat = self.encode_ecg(ecg_waveforms).detach()
+            results["ecg"] = feat
+            self._precomputed["ecg"] = feat
         if text_input_ids is not None:
-            results["text"] = self.encode_text(text_input_ids, text_attention_mask)
+            feat = self.encode_text(text_input_ids, text_attention_mask).detach()
+            results["text"] = feat
+            self._precomputed["text"] = feat
         if structured_features is not None:
-            results["structured"] = self.encode_structured(structured_features)
+            feat = self.encode_structured(structured_features).detach()
+            results["structured"] = feat
+            self._precomputed["structured"] = feat
         return results
 
     def clear_precomputed(self):
@@ -331,11 +323,12 @@ class CrossModalAttention(nn.Module):
     computes attention over modality feature sets to produce context vectors.
     """
 
-    def __init__(self, unified_dim: int = 256, num_heads: int = 4, dropout: float = 0.1):
+    def __init__(self, unified_dim: int = 256, num_heads: int = 4, dropout: float = 0.1, num_tokens: int = 4):
         super().__init__()
         self.num_heads = num_heads
-        self.head_dim = unified_dim // num_heads
-        assert self.head_dim * num_heads == unified_dim
+        self.num_tokens = num_tokens
+        self.head_dim = unified_dim // (num_heads * num_tokens)
+        assert self.head_dim * num_heads * num_tokens == unified_dim
 
         self.norm_q = nn.LayerNorm(unified_dim)
         self.norm_k = nn.LayerNorm(unified_dim)
@@ -353,9 +346,9 @@ class CrossModalAttention(nn.Module):
         mask: FloatTensor | None = None,
     ) -> tuple[FloatTensor, FloatTensor]:
         B = head_features.size(0)
-        Q = self.q_proj(self.norm_q(head_features)).view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
-        K = self.k_proj(self.norm_k(tail_features)).view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
-        V = self.v_proj(self.norm_k(tail_features)).view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        Q = self.q_proj(self.norm_q(head_features)).view(B, self.num_tokens, self.num_heads, self.head_dim).transpose(1, 2)
+        K = self.k_proj(self.norm_k(tail_features)).view(B, self.num_tokens, self.num_heads, self.head_dim).transpose(1, 2)
+        V = self.v_proj(self.norm_k(tail_features)).view(B, self.num_tokens, self.num_heads, self.head_dim).transpose(1, 2)
 
         attn = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
         if mask is not None:
@@ -387,6 +380,7 @@ class PIDSynergy(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(inplace=True),
         )
+        nn.init.xavier_uniform_(self.pair_encoder[0].weight)
         self.relation_encoder = nn.Embedding(num_relations, hidden_dim)
         nn.init.xavier_uniform_(self.relation_encoder.weight)
         self.combiner = nn.Sequential(
@@ -446,6 +440,7 @@ class MultimodalComplExModel(nn.Module):
         use_modality_encoders: bool = False,
         use_pretrained_encoders: bool = False,
         modalities: set[str] | None = None,
+        cross_modal_relations: set[int] | None = None,
     ):
         super().__init__()
         self.num_entities = num_entities
@@ -456,14 +451,16 @@ class MultimodalComplExModel(nn.Module):
         self.synergy_dim = synergy_dim
         self.use_modality_encoders = use_modality_encoders
         self.modalities = modalities or {"text"}
+        self.cross_modal_relations = cross_modal_relations
 
         self.entity_embeddings = nn.Embedding(num_entities, embed_dim * 2)
         self.relation_embeddings = nn.Embedding(num_relations, embed_dim * 2)
         nn.init.xavier_uniform_(self.entity_embeddings.weight)
         nn.init.xavier_uniform_(self.relation_embeddings.weight)
 
-        self.modality_embeddings = nn.Embedding(num_modalities, embed_dim)
-        nn.init.xavier_uniform_(self.modality_embeddings.weight)
+        _ent_bound = (6.0 / (num_entities + embed_dim * 2)) ** 0.5
+        self.modality_embeddings = nn.Embedding(num_modalities, embed_dim * 2)
+        nn.init.uniform_(self.modality_embeddings.weight, -_ent_bound, _ent_bound)
 
         self.has_modality_logit = nn.Parameter(torch.zeros(num_entities, 1))
 
@@ -543,7 +540,9 @@ class MultimodalComplExModel(nn.Module):
 
         has_mod = torch.sigmoid(self.has_modality_logit[entity_ids]).squeeze(-1)
         mod_emb = self.modality_embeddings(entity_modality_ids[entity_ids])
-        re = re + mod_emb * has_mod.unsqueeze(-1)
+        mod_re, mod_im = mod_emb[:, :d], mod_emb[:, d:]
+        re = re + mod_re * has_mod.unsqueeze(-1)
+        im = im + mod_im * has_mod.unsqueeze(-1)
 
         return re, im, has_mod
 
@@ -558,6 +557,11 @@ class MultimodalComplExModel(nn.Module):
         ctx = torch.zeros(B, self.embed_dim, device=head_ids.device)
 
         if not hasattr(self, "_entity_features") or self._entity_features is None:
+            if getattr(self, "precompute_features", False):
+                raise ValueError(
+                    "_compute_cross_modal_context requires precomputed features "
+                    "but set_precomputed_features was never called."
+                )
             return ctx
 
         cross_mask = head_mod_ids != tail_mod_ids
@@ -568,6 +572,12 @@ class MultimodalComplExModel(nn.Module):
         tail_idx = tail_ids[cross_mask]
 
         if not hasattr(self, "_feature_tensor") or self._feature_tensor is None:
+            if getattr(self, "precompute_features", False):
+                raise ValueError(
+                    "_compute_cross_modal_context requires precomputed features "
+                    "but _feature_tensor is None (set_precomputed_features called "
+                    "with empty data)."
+                )
             return ctx
 
         max_id = self._feature_tensor.size(0)
@@ -615,9 +625,12 @@ class MultimodalComplExModel(nn.Module):
         h_re, h_im = h[:, :d], h[:, d:]
         r_re, r_im = r[:, :d], r[:, d:]
         t_re, t_im = t[:, :d], t[:, d:]
+        mod = self.modality_embeddings.weight
+        mod_re, mod_im = mod[:, :d], mod[:, d:]
         return (h_re.norm(p=3, dim=-1).mean() + h_im.norm(p=3, dim=-1).mean()
                 + r_re.norm(p=3, dim=-1).mean() + r_im.norm(p=3, dim=-1).mean()
-                + t_re.norm(p=3, dim=-1).mean() + t_im.norm(p=3, dim=-1).mean())
+                + t_re.norm(p=3, dim=-1).mean() + t_im.norm(p=3, dim=-1).mean()
+                + mod_re.norm(p=3, dim=-1).mean() + mod_im.norm(p=3, dim=-1).mean())
 
     def clamp_embed_norm(self, max_norm: float = 1.0):
         with torch.no_grad():
@@ -625,6 +638,8 @@ class MultimodalComplExModel(nn.Module):
             self.entity_embeddings.weight.mul_(max_norm)
             nn.functional.normalize(self.relation_embeddings.weight, p=2, dim=-1, out=self.relation_embeddings.weight)
             self.relation_embeddings.weight.mul_(max_norm)
+            nn.functional.normalize(self.modality_embeddings.weight, p=2, dim=-1, out=self.modality_embeddings.weight)
+            self.modality_embeddings.weight.mul_(max_norm)
             if hasattr(self, 'has_modality_logit'):
                 self.has_modality_logit.clamp_(-5.0, 5.0)
 
@@ -655,6 +670,12 @@ class MultimodalComplExModel(nn.Module):
         h_mod = entity_modality_ids[heads]
         t_mod = entity_modality_ids[tails]
         cross_modal_mask = h_mod != t_mod
+        if self.cross_modal_relations is not None:
+            rel_set = self.cross_modal_relations
+            rel_mask = torch.zeros_like(cross_modal_mask)
+            for r_id in rel_set:
+                rel_mask |= relations == r_id
+            cross_modal_mask = cross_modal_mask & rel_mask
 
         if cross_modal_mask.any():
             synergy = self.pid_synergy(h_mod[cross_modal_mask], t_mod[cross_modal_mask], relations[cross_modal_mask])
@@ -669,9 +690,11 @@ class MultimodalComplExModel(nn.Module):
             modulation = torch.zeros_like(h_re)
             modulation[cross_modal_mask] = modulation_cross if modulation_cross.dtype == modulation.dtype else modulation_cross.to(modulation.dtype)
 
-            augmented_re = h_re + modulation
-            augmented_im = h_im + modulation
-            aug_score = self._complEx_score(augmented_re, augmented_im, r_re, r_im, t_re, t_im)
+            augmented_h_re = h_re + modulation
+            augmented_h_im = h_im + modulation
+            augmented_t_re = t_re + modulation
+            augmented_t_im = t_im + modulation
+            aug_score = self._complEx_score(augmented_h_re, augmented_h_im, r_re, r_im, augmented_t_re, augmented_t_im)
             base_score = torch.where(cross_modal_mask, aug_score, base_score)
 
         return base_score
@@ -713,6 +736,7 @@ class MultimodalCASCADEModel(nn.Module):
         use_pretrained_encoders: bool = False,
         modalities: set[str] | None = None,
         ablation: str | None = None,
+        cross_modal_relations: set[int] | None = None,
     ):
         super().__init__()
         self.num_entities = num_entities
@@ -722,6 +746,7 @@ class MultimodalCASCADEModel(nn.Module):
         self.num_modalities = num_modalities
         self.ablation = ablation
         self.modalities = modalities or {"text"}
+        self.cross_modal_relations = cross_modal_relations
 
         self.entity_embeddings = nn.Embedding(num_entities, embed_dim * 2)
         self.relation_embeddings = nn.Embedding(num_relations, embed_dim * 2)
@@ -734,7 +759,7 @@ class MultimodalCASCADEModel(nn.Module):
         # Using the entity table's bound for all auxiliary embeddings fixes this.
         _ent_bound = (6.0 / (num_entities + embed_dim * 2)) ** 0.5
 
-        self.modality_embeddings = nn.Embedding(num_modalities, embed_dim)
+        self.modality_embeddings = nn.Embedding(num_modalities, embed_dim * 2)
         nn.init.uniform_(self.modality_embeddings.weight, -_ent_bound, _ent_bound)
 
         self.entity_type_embeddings = nn.Embedding(num_entity_types, embed_dim)
@@ -821,11 +846,14 @@ class MultimodalCASCADEModel(nn.Module):
 
         if self.ablation not in ("no_modality", "all"):
             mod_emb = self.modality_embeddings(entity_modality_ids[entity_ids])
-            re = re + mod_emb * has_mod.unsqueeze(-1)
+            mod_re, mod_im = mod_emb[:, :d], mod_emb[:, d:]
+            re = re + mod_re * has_mod.unsqueeze(-1)
+            im = im + mod_im * has_mod.unsqueeze(-1)
 
         if self.ablation not in ("no_type", "all"):
             type_emb = self.entity_type_embeddings(entity_type_ids[entity_ids])
             re = re + type_emb
+            im = im + type_emb
 
         return re, im
 
@@ -840,6 +868,11 @@ class MultimodalCASCADEModel(nn.Module):
         ctx = torch.zeros(B, self.embed_dim, device=head_ids.device)
 
         if not hasattr(self, "_entity_features") or self._entity_features is None:
+            if getattr(self, "precompute_features", False):
+                raise ValueError(
+                    "_compute_cross_modal_context requires precomputed features "
+                    "but set_precomputed_features was never called."
+                )
             return ctx
 
         cross_mask = head_mod_ids != tail_mod_ids
@@ -850,6 +883,12 @@ class MultimodalCASCADEModel(nn.Module):
         tail_idx = tail_ids[cross_mask]
 
         if not hasattr(self, "_feature_tensor") or self._feature_tensor is None:
+            if getattr(self, "precompute_features", False):
+                raise ValueError(
+                    "_compute_cross_modal_context requires precomputed features "
+                    "but _feature_tensor is None (set_precomputed_features called "
+                    "with empty data)."
+                )
             return ctx
 
         max_id = self._feature_tensor.size(0)
@@ -897,9 +936,14 @@ class MultimodalCASCADEModel(nn.Module):
         h_re, h_im = h[:, :d], h[:, d:]
         r_re, r_im = r[:, :d], r[:, d:]
         t_re, t_im = t[:, :d], t[:, d:]
+        mod = self.modality_embeddings.weight
+        mod_re, mod_im = mod[:, :d], mod[:, d:]
+        type_w = self.entity_type_embeddings.weight
         return (h_re.norm(p=3, dim=-1).mean() + h_im.norm(p=3, dim=-1).mean()
                 + r_re.norm(p=3, dim=-1).mean() + r_im.norm(p=3, dim=-1).mean()
-                + t_re.norm(p=3, dim=-1).mean() + t_im.norm(p=3, dim=-1).mean())
+                + t_re.norm(p=3, dim=-1).mean() + t_im.norm(p=3, dim=-1).mean()
+                + mod_re.norm(p=3, dim=-1).mean() + mod_im.norm(p=3, dim=-1).mean()
+                + type_w.norm(p=3, dim=-1).mean())
 
     def clamp_embed_norm(self, max_norm: float = 1.0):
         with torch.no_grad():
@@ -907,6 +951,10 @@ class MultimodalCASCADEModel(nn.Module):
             self.entity_embeddings.weight.mul_(max_norm)
             nn.functional.normalize(self.relation_embeddings.weight, p=2, dim=-1, out=self.relation_embeddings.weight)
             self.relation_embeddings.weight.mul_(max_norm)
+            nn.functional.normalize(self.modality_embeddings.weight, p=2, dim=-1, out=self.modality_embeddings.weight)
+            self.modality_embeddings.weight.mul_(max_norm)
+            nn.functional.normalize(self.entity_type_embeddings.weight, p=2, dim=-1, out=self.entity_type_embeddings.weight)
+            self.entity_type_embeddings.weight.mul_(max_norm)
             if hasattr(self, 'has_modality_logit'):
                 self.has_modality_logit.clamp_(-5.0, 5.0)
 
@@ -939,6 +987,11 @@ class MultimodalCASCADEModel(nn.Module):
             h_mod = entity_modality_ids[heads]
             t_mod = entity_modality_ids[tails]
             cross_modal_mask = h_mod != t_mod
+            if self.cross_modal_relations is not None:
+                rel_mask = torch.zeros_like(cross_modal_mask)
+                for r_id in self.cross_modal_relations:
+                    rel_mask |= relations == r_id
+                cross_modal_mask = cross_modal_mask & rel_mask
 
             if cross_modal_mask.any():
                 synergy = self.pid_synergy(h_mod[cross_modal_mask], t_mod[cross_modal_mask], relations[cross_modal_mask])
@@ -953,9 +1006,11 @@ class MultimodalCASCADEModel(nn.Module):
                 modulation = torch.zeros_like(h_re)
                 modulation[cross_modal_mask] = modulation_cross if modulation_cross.dtype == modulation.dtype else modulation_cross.to(modulation.dtype)
 
-                augmented_re = h_re + modulation
-                augmented_im = h_im + modulation
-                aug_score = self._complEx_score(augmented_re, augmented_im, r_re, r_im, t_re, t_im)
+                augmented_h_re = h_re + modulation
+                augmented_h_im = h_im + modulation
+                augmented_t_re = t_re + modulation
+                augmented_t_im = t_im + modulation
+                aug_score = self._complEx_score(augmented_h_re, augmented_h_im, r_re, r_im, augmented_t_re, augmented_t_im)
                 base_score = torch.where(cross_modal_mask, aug_score, base_score)
 
         return base_score
@@ -984,6 +1039,7 @@ class CASCADEKGModel(nn.Module):
         num_modalities: int = 4,
         ablation: str | None = None,
         dropout: float = 0.0,
+        cross_modal_relations: set[int] | None = None,
     ):
         super().__init__()
         self.num_entities = num_entities
@@ -991,17 +1047,20 @@ class CASCADEKGModel(nn.Module):
         self.embed_dim = embed_dim
         self.real_embed_dim = embed_dim
         self.ablation = ablation
+        self.cross_modal_relations = cross_modal_relations
 
         self.entity_embeddings = nn.Embedding(num_entities, embed_dim * 2)
         self.relation_embeddings = nn.Embedding(num_relations, embed_dim * 2)
         nn.init.xavier_uniform_(self.entity_embeddings.weight)
         nn.init.xavier_uniform_(self.relation_embeddings.weight)
 
-        self.modality_embeddings = nn.Embedding(num_modalities, embed_dim)
-        nn.init.xavier_uniform_(self.modality_embeddings.weight)
+        _ent_bound = (6.0 / (num_entities + embed_dim * 2)) ** 0.5
+
+        self.modality_embeddings = nn.Embedding(num_modalities, embed_dim * 2)
+        nn.init.uniform_(self.modality_embeddings.weight, -_ent_bound, _ent_bound)
 
         self.entity_type_embeddings = nn.Embedding(num_entity_types, embed_dim)
-        nn.init.xavier_uniform_(self.entity_type_embeddings.weight)
+        nn.init.uniform_(self.entity_type_embeddings.weight, -_ent_bound, _ent_bound)
 
         self.pid_synergy_raw = nn.Parameter(torch.zeros(num_modalities, num_modalities))
         self._softplus_zero = F.softplus(torch.tensor(0.0))
@@ -1016,10 +1075,13 @@ class CASCADEKGModel(nn.Module):
 
         if self.ablation != "no_modality":
             mod_emb = self.modality_embeddings(entity_modality_ids[entity_ids])
-            re = re + mod_emb
+            mod_re, mod_im = mod_emb[:, :d], mod_emb[:, d:]
+            re = re + mod_re
+            im = im + mod_im
         if self.ablation != "no_type":
             type_emb = self.entity_type_embeddings(entity_type_ids[entity_ids])
             re = re + type_emb
+            im = im + type_emb
 
         return re, im
 
@@ -1065,11 +1127,18 @@ class CASCADEKGModel(nn.Module):
             h_mod = entity_modality_ids[heads]
             t_mod = entity_modality_ids[tails]
             cross_modal_mask = h_mod != t_mod
+            if self.cross_modal_relations is not None:
+                rel_mask = torch.zeros_like(cross_modal_mask)
+                for r_id in self.cross_modal_relations:
+                    rel_mask |= relations == r_id
+                cross_modal_mask = cross_modal_mask & rel_mask
 
             if cross_modal_mask.any():
                 sp0 = self._softplus_zero.to(base_score.device)
                 pid_weight = 1.0 + F.softplus(self.pid_synergy_raw[h_mod[cross_modal_mask], t_mod[cross_modal_mask]]) - sp0
-                base_score[cross_modal_mask] = base_score[cross_modal_mask] * pid_weight
+                pid_weight_full = torch.ones_like(base_score)
+                pid_weight_full.masked_scatter_(cross_modal_mask, pid_weight)
+                base_score = base_score * pid_weight_full
 
         return base_score
 
@@ -1090,9 +1159,14 @@ class CASCADEKGModel(nn.Module):
         h_re, h_im = h[:, :d], h[:, d:]
         r_re, r_im = r[:, :d], r[:, d:]
         t_re, t_im = t[:, :d], t[:, d:]
+        mod = self.modality_embeddings.weight
+        mod_re, mod_im = mod[:, :d], mod[:, d:]
+        type_w = self.entity_type_embeddings.weight
         return (h_re.norm(p=3, dim=-1).mean() + h_im.norm(p=3, dim=-1).mean()
                 + r_re.norm(p=3, dim=-1).mean() + r_im.norm(p=3, dim=-1).mean()
-                + t_re.norm(p=3, dim=-1).mean() + t_im.norm(p=3, dim=-1).mean())
+                + t_re.norm(p=3, dim=-1).mean() + t_im.norm(p=3, dim=-1).mean()
+                + mod_re.norm(p=3, dim=-1).mean() + mod_im.norm(p=3, dim=-1).mean()
+                + type_w.norm(p=3, dim=-1).mean())
 
     def clamp_embed_norm(self, max_norm: float = 1.0):
         with torch.no_grad():
@@ -1100,6 +1174,10 @@ class CASCADEKGModel(nn.Module):
             self.entity_embeddings.weight.mul_(max_norm)
             nn.functional.normalize(self.relation_embeddings.weight, p=2, dim=-1, out=self.relation_embeddings.weight)
             self.relation_embeddings.weight.mul_(max_norm)
+            nn.functional.normalize(self.modality_embeddings.weight, p=2, dim=-1, out=self.modality_embeddings.weight)
+            self.modality_embeddings.weight.mul_(max_norm)
+            nn.functional.normalize(self.entity_type_embeddings.weight, p=2, dim=-1, out=self.entity_type_embeddings.weight)
+            self.entity_type_embeddings.weight.mul_(max_norm)
 
 
 class InfoNCELoss(nn.Module):

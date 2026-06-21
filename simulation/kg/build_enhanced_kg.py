@@ -1374,53 +1374,15 @@ def build_drug_disease_edges(kg: ClinicalKG, client, patient_ids: List[int],
                     continue
 
                 rel_name = RELA_TO_RELATION.get(rela, "treats")
-                kg.add_relation(Relation(head=drug_eid, relation=rel_name, tail=dis_eid, weight=1.0))
+                kg.add_relation(Relation(head=drug_eid, relation=rel_name, tail=dis_eid, weight=1.0, source="umls"))
                 ontology_edges += 1
                 edge_counts[rel_name] += 1
 
-        print(f"  Ontology Drug→Disease: {ontology_edges} edges")
+        print(f"  Ontology Drug→Disease (source=umls): {ontology_edges} edges")
         for rel, cnt in sorted(edge_counts.items()):
             print(f"    {rel}: {cnt}")
     else:
         print(f"  WARNING: {csv_path} not found")
-
-    if ontology_edges < 100:
-        print("  Few ontology edges found, adding co-occurrence fallback...")
-        if diag_df.empty or rx_df.empty:
-            print("  Missing diagnosis or prescription data, skipping")
-            return
-
-        patient_drugs: Dict[int, Set[str]] = defaultdict(set)
-        for sid, group in rx_df[['subject_id', 'drg_id']].drop_duplicates().groupby('subject_id'):
-            patient_drugs[int(sid)].update(group['drg_id'].tolist())
-
-        patient_diagnoses: Dict[int, Set[str]] = defaultdict(set)
-        for sid, group in diag_df[['subject_id', 'dis_id']].drop_duplicates().groupby('subject_id'):
-            patient_diagnoses[int(sid)].update(group['dis_id'].tolist())
-
-        cooccurrence: Counter = Counter()
-        common_patients = set(patient_drugs.keys()) & set(patient_diagnoses.keys())
-        for sid in tqdm(common_patients, desc="Drug-Disease co-occurrence"):
-            for drg_id in patient_drugs[sid]:
-                for dis_id in patient_diagnoses[sid]:
-                    cooccurrence[(drg_id, dis_id)] += 1
-
-        if not cooccurrence:
-            print("  0 Drug→Disease co-occurrence edges")
-            return
-
-        max_count = max(cooccurrence.values())
-        min_patients = 3
-        treats_edges = 0
-        for (drg_id, dis_id), count in cooccurrence.items():
-            if count < min_patients:
-                continue
-            weight = count / max_count
-            if drg_id in kg.entities and dis_id in kg.entities:
-                kg.add_relation(Relation(head=drg_id, relation="treats", tail=dis_id, weight=weight))
-                treats_edges += 1
-
-        print(f"  Drug→Disease: {treats_edges} treats edges (min {min_patients} patients, max co-occ={max_count})")
 
 
 def build_snomed_disease_hierarchy(kg: ClinicalKG, crosswalks: Dict[str, Any]) -> None:
@@ -1730,7 +1692,6 @@ def build_temporal_edges_bq(kg: ClinicalKG, client, patient_ids: List[int],
     all_events = all_events[all_events['hadm_id'] != 0]
 
     total_before = 0
-    total_after = 0
     admissions_with_temporal = 0
 
     for (_, hadm_id), group in tqdm(all_events.groupby(['subject_id', 'hadm_id']), desc="Temporal edges"):
@@ -1745,13 +1706,11 @@ def build_temporal_edges_bq(kg: ClinicalKG, client, patient_ids: List[int],
                 break
             if timestamps[i] < timestamps[i + 1]:
                 kg.add_relation(Relation(head=entities[i], relation="before", tail=entities[i + 1], weight=1.0))
-                kg.add_relation(Relation(head=entities[i + 1], relation="after", tail=entities[i], weight=1.0))
                 total_before += 1
-                total_after += 1
                 edge_count += 1
         admissions_with_temporal += 1
 
-    print(f"  Temporal: {admissions_with_temporal} admissions, {total_before} before edges, {total_after} after edges")
+    print(f"  Temporal: {admissions_with_temporal} admissions, {total_before} before edges")
 
 
 def ensure_patient_finding_edges(kg: ClinicalKG, data_dir: Path) -> None:
@@ -1859,7 +1818,7 @@ def save_efficient_extended(kg: ClinicalKG, directory: Path) -> None:
         "relation_type_counts": kg.relation_type_counts,
         "enhanced": True,
         "new_relation_types": ["diagnosed_with", "prescribed", "has_lab", "has_vital", "underwent",
-                                "before", "after", "treats", "has_focus", "due_to", "associated_with"],
+                                "before", "treats", "has_focus", "due_to", "associated_with"],
     }
 
     np.save(directory / "entities.npy", entities_arr)
