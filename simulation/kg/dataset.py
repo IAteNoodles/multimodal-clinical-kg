@@ -871,9 +871,10 @@ class LinkPredictionEvaluator:
                     pos = torch.searchsorted(self.known_triples_keys_sorted, t_keys)
                     pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
                     is_known_t = (self.known_triples_keys_sorted[pos] == t_keys).reshape(bsz, self.num_entities)
+                    gold_t = t_scores[torch.arange(bsz, device=self.device), tails].clone()
                     t_scores[is_known_t] = float("-inf")
-                    true_t_scores = t_scores[torch.arange(bsz, device=self.device), tails]
-                    tail_ranks = (t_scores > true_t_scores.unsqueeze(1)).sum(dim=1) + 1
+                    t_scores[torch.arange(bsz, device=self.device), tails] = gold_t
+                    tail_ranks = (t_scores > gold_t.unsqueeze(1)).sum(dim=1) + 1
 
                     h_exp_h = all_ents.unsqueeze(0).expand(bsz, -1).reshape(-1)
                     r_exp_h = rels.unsqueeze(1).expand(-1, self.num_entities).reshape(-1)
@@ -887,9 +888,10 @@ class LinkPredictionEvaluator:
                     pos = torch.searchsorted(self.known_triples_keys_sorted, h_keys)
                     pos = pos.clamp(max=self.known_triples_keys_sorted.size(0) - 1)
                     is_known_h = (self.known_triples_keys_sorted[pos] == h_keys).reshape(bsz, self.num_entities)
+                    gold_h = h_scores[torch.arange(bsz, device=self.device), heads].clone()
                     h_scores[is_known_h] = float("-inf")
-                    true_h_scores = h_scores[torch.arange(bsz, device=self.device), heads]
-                    head_ranks = (h_scores > true_h_scores.unsqueeze(1)).sum(dim=1) + 1
+                    h_scores[torch.arange(bsz, device=self.device), heads] = gold_h
+                    head_ranks = (h_scores > gold_h.unsqueeze(1)).sum(dim=1) + 1
 
                     batch_cross = cross_mask_all[start:end]
                     batch_within = within_mask_all[start:end]

@@ -83,7 +83,7 @@ def detect_model_type(state_dict: Dict[str, torch.Tensor]) -> str:
 
 def detect_embed_dim(state_dict: Dict[str, torch.Tensor], model_type: str) -> int:
     ent_dim = state_dict["entity_embeddings.weight"].shape[1]
-    if model_type in ("cascade", "complex"):
+    if model_type in ("cascade", "complex", "multimodal_cascade", "multimodal_complex"):
         embed_dim = ent_dim // 2
         if "modality_embeddings.weight" in state_dict:
             embed_dim = state_dict["modality_embeddings.weight"].shape[1]

@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from simulation.kg.dataset import (
     ENTITY_TYPE_TO_ID, MODALITY_TO_ID, KGTriplesDataset, NegativeSampler,
-    LinkPredictionEvaluator, MODALITY_SET_MAP,
+    LinkPredictionEvaluator, MODALITY_SET_MAP, CROSS_MODAL_RELATIONS,
 )
 from simulation.kg.models import (
     MultimodalCASCADEModel, TransEModel, ComplExModel,
@@ -29,13 +29,18 @@ def build_model(args, dataset):
     if args.model == 'complex':
         return ComplExModel(num_ents, num_rels, args.embed_dim, dropout=args.dropout)
     if args.model == 'multimodal_cascade':
-        return MultimodalCASCADEModel(
+        cross_rel_ids = {dataset.relation2id[r] for r in CROSS_MODAL_RELATIONS if r in dataset.relation2id}
+        model = MultimodalCASCADEModel(
             num_ents, num_rels, args.embed_dim,
             num_entity_types=len(ENTITY_TYPE_TO_ID),
             num_modalities=len(MODALITY_TO_ID), synergy_dim=64, num_heads=4,
             dropout=args.dropout, use_modality_encoders=False,
             use_pretrained_encoders=False, modalities=mods, ablation=args.ablation,
+            cross_modal_relations=cross_rel_ids,
         )
+        if not args.feature_dir:
+            model.precompute_features = False
+        return model
     raise ValueError(f"Unsupported model: {args.model}")
 
 
@@ -140,6 +145,7 @@ def run_test_eval(model, evaluator, dataset, args, device, entity_type_ids=None,
         batch_size=min(args.eval_batch_size, 4096),
         max_triples=args.max_eval_triples,
         num_eval_negatives=args.num_eval_negatives,
+        full_rank=True,
         entity_type_ids=entity_type_ids if _needs_modality_ids(model) else None,
         entity_modality_ids=entity_modality_ids if _needs_modality_ids(model) else None,
     )
