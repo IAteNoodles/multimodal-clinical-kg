@@ -143,7 +143,7 @@ def run_test_eval(model, evaluator, dataset, args, device, entity_type_ids=None,
     test_metrics = evaluator.evaluate(
         model, test_t, test_w,
         batch_size=min(args.eval_batch_size, 4096),
-        max_triples=args.max_eval_triples,
+        max_triples=None,
         num_eval_negatives=args.num_eval_negatives,
         full_rank=True,
         entity_type_ids=entity_type_ids if _needs_modality_ids(model) else None,

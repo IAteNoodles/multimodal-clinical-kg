@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-set BASE=python simulation/kg/train_manual.py --batch-size 4350 --num-negatives 4 --grad-accum-steps 2 --epochs 50 --eval --patience 10 --eval-batch-size 512 --eval-every-epochs 3
+set BASE=python simulation/kg/train_manual.py --batch-size 4350 --num-negatives 4 --grad-accum-steps 2 --epochs 50 --eval --patience 10 --eval-batch-size 512 --eval-every-epochs 3 --max-eval-triples 5000
 
 if not exist ckpts\ablation mkdir ckpts\ablation
 

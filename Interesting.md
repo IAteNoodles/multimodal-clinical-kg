@@ -13,7 +13,7 @@
 
 Their best link prediction: **TransD Hits@10 = 11.89%** (head), **18.87%** (tail). Most models get near-zero — ComplEx Hits@10 = 0.11% head.
 
-**Ours**: Full Cascade best test MRR **0.8209** (50-negative sampled eval, NOT full filtered).
+**Ours**: Full-ranking re-evaluation pending after audit fixes (disease hierarchy, eval pipeline). Previous sampled-eval MRR 0.8209 is stale and expected to change.
 
 Why their LP is terrible: 262 relations / 8K entities = extreme sparsity. Most tensor factorization models (DistMult, SimplE, RESCAL, ComplEx) collapse to near-zero. Only translation models (TransD, TransE, TransH) survive barely.
 
@@ -35,14 +35,14 @@ Why their LP is terrible: 262 relations / 8K entities = extreme sparsity. Most t
 ## What We Have That They Don't
 
 - **CASCADE model** with entity-type awareness, modality embeddings, synergy heads — architecturally more sophisticated than any of their 17 LP baselines.
-- **Order-of-magnitude better** link prediction performance (82%+ MRR vs <19% Hits@10).
+- **Order-of-magnitude better** link prediction performance (full-ranking re-eval pending; previously 82%+ MRR on sampled eval vs <19% Hits@10).
 - **ECG modality** (they only have CXR images).
 - **Much larger, richer graph** with patient/study-level entities (421K entities, 3.77M triples).
 - **Multimodal feature fusion** into embeddings rather than images-as-nodes topology.
 
 ## Key Takeaway
 
-MedMKG is a **benchmark paper** (NeurIPS 2025 submission) focused on downstream task evaluation (retrieval + VQA). Their KG is small (35K edges) and their link prediction is an afterthought with terrible results. Our core contribution is **strong KG embedding models** achieving 82%+ MRR on a much larger clinical graph with novel architecture (CASCADE). Different focus, different strengths.
+MedMKG is a **benchmark paper** (NeurIPS 2025 submission) focused on downstream task evaluation (retrieval + VQA). Their KG is small (35K edges) and their link prediction is an afterthought with terrible results. Our core contribution is **strong KG embedding models** on a much larger clinical graph with novel architecture (CASCADE) — full-ranking MRR pending re-evaluation after audit fixes. Different focus, different strengths.
 
 Their NaF algorithm, semantic edge labels, and downstream augmentation framework (KnowledgeCLIP, MR-MKO) are interesting ideas we could adopt to extend our work beyond link prediction into clinically meaningful downstream tasks.
 
