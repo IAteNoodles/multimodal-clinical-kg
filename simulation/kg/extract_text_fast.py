@@ -40,7 +40,7 @@ def extract_text_features_fast(texts, entity_ids, output_dir, batch_size=256, ma
             input_ids = encoded['input_ids'].to(device)
             attention_mask = encoded['attention_mask'].to(device)
 
-            with torch.amp.autocast('cuda'):
+            with torch.amp.autocast('cuda', enabled=(torch.device(device).type == 'cuda')):
                 out = model(input_ids=input_ids, attention_mask=attention_mask)
                 mask_exp = attention_mask.unsqueeze(-1).float()
                 pooled = (out.last_hidden_state * mask_exp).sum(1) / mask_exp.sum(1).clamp(min=1)
@@ -95,7 +95,7 @@ def main():
     df = pd.read_csv(data_dir / "text_reports.csv.gz", compression='gzip')
     print(f"Loaded {len(df)} text reports")
 
-    entity_ids = list(range(len(df)))
+    entity_ids = df['study_id'].tolist() if 'study_id' in df.columns else list(range(len(df)))
     texts = df['text'].fillna('').str.strip().tolist()
     texts = [t if t else "no finding" for t in texts]
 

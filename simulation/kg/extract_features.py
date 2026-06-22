@@ -313,7 +313,7 @@ def build_entity_feature_map(output_dir: Path) -> dict[int, np.ndarray]:
             ids = []
             for row in reader:
                 try:
-                    ids.append(int(float(row['entity_id'])))
+                    ids.append(row['entity_id'])
                 except (ValueError, TypeError):
                     continue
         for i, eid in enumerate(ids):
@@ -336,7 +336,7 @@ def save_entity_feature_map(feature_map: dict, output_dir: Path):
                 parts.append(np.zeros(MOD_DIMS[k], dtype=np.float16))
         combined = np.concatenate(parts, axis=0)
         save_dict[str(eid)] = combined
-    all_ids = sorted(save_dict.keys(), key=int)
+    all_ids = sorted(save_dict.keys())
     all_features = np.stack([save_dict[k] for k in all_ids], axis=0)
     np.save(output_dir / "entity_features.npy", all_features)
     with open(output_dir / "entity_feature_ids.csv", 'w', newline='') as f:
@@ -414,7 +414,7 @@ def main():
         elif modality == 'ecg':
             df = load_ecg_records(data_dir)
             if not df.empty:
-                entity_ids = df['ecg_id'].tolist() if 'ecg_id' in df.columns else list(range(len(df)))
+                entity_ids = [f"STY_PTBECG{int(eid)}" for eid in df['ecg_id'].tolist()] if 'ecg_id' in df.columns else list(range(len(df)))
                 if 'waveform_path' in df.columns:
                     paths = df['waveform_path'].tolist()
                 else:

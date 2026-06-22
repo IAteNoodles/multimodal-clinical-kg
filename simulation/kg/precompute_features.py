@@ -186,8 +186,13 @@ def load_modality_data(data_dir: Path, modality: str):
     if pt_file.exists():
         payload = torch.load(pt_file, weights_only=True)
         if isinstance(payload, dict):
-            ids = payload.get("entity_ids", list(range(payload["data"].shape[0])))
             data = payload["data"].float()
+            if "entity_ids" not in payload:
+                print(f"  [WARN] {modality}: no entity_ids in payload, falling back to row indices")
+                ids = list(range(data.shape[0]))
+            else:
+                ids = payload["entity_ids"]
+            assert len(ids) == data.shape[0], f"{modality}: len(entity_ids)={len(ids)} != data.shape[0]={data.shape[0]}"
             print(f"  Loaded {modality}: {len(ids)} entities, shape={data.shape}")
             return ids, data
 

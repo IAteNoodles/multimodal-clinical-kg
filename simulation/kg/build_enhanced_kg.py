@@ -321,7 +321,7 @@ ECG_COMPUTED_COLUMNS = {
     },
     "qtc": {
         "source_cols": ["t_end", "qrs_onset", "rr_interval"],
-        "compute": lambda df: (df["t_end"] - df["qrs_onset"]) / (df["rr_interval"] / 1000).apply(math.sqrt),
+        "compute": lambda df: (df["t_end"] - df["qrs_onset"]) / np.sqrt(df["rr_interval"] / 1000),
     },
 }
 
@@ -1723,7 +1723,7 @@ def ensure_patient_finding_edges(kg: ClinicalKG, data_dir: Path) -> None:
 
     for rel in kg.relations:
         if rel.relation == "finding_of":
-            study_to_findings[rel.head].add(rel.tail)
+            study_to_findings[rel.tail].add(rel.head)
         elif rel.relation == "has_finding":
             existing_edges.add((rel.head, rel.tail))
 

@@ -19,7 +19,7 @@ ENTITY_TYPE_TO_ID = {
     "Study": 4, "Drug": 5, "LabResult": 6, "Procedure": 7, "VitalResult": 8,
     "ECGMeasurement": 9, "ECGRhythm": 10, "Unknown": 11,
 }
-MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, None: 4}
+MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, "ONTOLOGY": 5, None: 6}
 
 ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "ECGMeasurement", "ECGRhythm", "Unknown"]
 CROSS_MODAL_RELATIONS = {"suggestive_of", "treats", "prevents", "contraindicated", "has_focus", "has_intent", "direct_site"}

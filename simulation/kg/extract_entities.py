@@ -243,7 +243,7 @@ class ClinicalKG:
             "Study": 4, "Drug": 5, "LabResult": 6, "Procedure": 7, "VitalResult": 8,
             "ECGMeasurement": 9, "ECGRhythm": 10, "Unknown": 11,
         }
-        MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, None: 4}
+        MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, "ONTOLOGY": 5, None: 6}
         ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "ECGMeasurement", "ECGRhythm", "Unknown"]
 
         # Deterministic entity ordering: sort by (type_order, id) — same as KGTriplesDataset.__init__
@@ -474,7 +474,7 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
         patient_id = int(row.get('patient_id', ecg_id))
 
         _add_entity_if_new(kg, f"PAT_PTB{patient_id}", "Patient", "ECG", str(patient_id))
-        _add_entity_if_new(kg, f"STY_ECG{ecg_id}", "Study", "ECG", str(ecg_id))
+        _add_entity_if_new(kg, f"STY_PTBECG{ecg_id}", "Study", "ECG", str(ecg_id))
 
         scp_str = row.get('scp_codes', '{}')
         try:
@@ -494,7 +494,7 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
                 kg.add_relation(Relation(head=f"PAT_PTB{patient_id}", relation="has_finding",
                                          tail=fnd_id, weight=float(prob)))
                 kg.add_relation(Relation(head=fnd_id, relation="finding_of",
-                                         tail=f"STY_ECG{ecg_id}", weight=1.0))
+                                         tail=f"STY_PTBECG{ecg_id}", weight=1.0))
                 patient_findings[patient_id].append(code_str)
 
                 disease_name = ECG_CLASS_TO_DISEASE.get(diag_class)
@@ -525,7 +525,7 @@ def extract_ptbxl_findings(kg: ClinicalKG, data_dir: Path) -> Tuple[pd.DataFrame
                 kg.add_relation(Relation(head=f"PAT_PTB{patient_id}", relation="has_finding",
                                          tail=fnd_id, weight=float(prob)))
                 kg.add_relation(Relation(head=fnd_id, relation="finding_of",
-                                         tail=f"STY_ECG{ecg_id}", weight=1.0))
+                                         tail=f"STY_PTBECG{ecg_id}", weight=1.0))
                 patient_findings[patient_id].append(code_str)
 
                 anats = SCP_TO_ANATOMY.get(code_str, [])
@@ -740,7 +740,7 @@ def build_same_patient_edges(kg: ClinicalKG, chexpert_df: pd.DataFrame, data_dir
 
     ecg_patient_studies: Dict[str, List[str]] = defaultdict(list)
     for rel in kg.relations:
-        if rel.relation == "finding_of" and rel.tail.startswith("STY_ECG"):
+        if rel.relation == "finding_of" and rel.tail.startswith("STY_PTBECG"):
             study_id = rel.tail
             for fnd_rel in kg.relations:
                 if fnd_rel.relation == "has_finding" and fnd_rel.tail == rel.head:
@@ -946,8 +946,8 @@ def build_cross_modal_edges(kg: ClinicalKG, chexpert_df: pd.DataFrame, data_dir:
             if count < 1:
                 continue
             p_joint = count / total_patients
-            cxr_count = sum(1 for v in cxr_findings_by_patient.values() if cxr_id.replace("FND_CXR_", "") in v)
-            ecg_count = sum(1 for v in ecg_patient_to_findings.values() if ecg_id.replace("FND_ECG_", "") in v)
+            cxr_count = sum(1 for sid in overlap_subjects if cxr_id.replace("FND_CXR_", "") in cxr_findings_by_patient.get(sid, []))
+            ecg_count = sum(1 for sid in overlap_subjects if ecg_id.replace("FND_ECG_", "") in ecg_patient_to_findings.get(f"PAT_{sid}", []))
             p_cxr = max(cxr_count / total_patients, 1e-10)
             p_ecg = max(ecg_count / total_patients, 1e-10)
             pmi = math.log(p_joint / (p_cxr * p_ecg)) if p_joint > 0 else 0.0
