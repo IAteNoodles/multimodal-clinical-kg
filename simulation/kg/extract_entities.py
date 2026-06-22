@@ -243,7 +243,7 @@ class ClinicalKG:
             "Study": 4, "Drug": 5, "LabResult": 6, "Procedure": 7, "VitalResult": 8,
             "ECGMeasurement": 9, "ECGRhythm": 10, "Unknown": 11,
         }
-        MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, "ONTOLOGY": 5, None: 6}
+        MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, "ONTOLOGY": 4, None: 5}
         ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "ECGMeasurement", "ECGRhythm", "Unknown"]
 
         # Deterministic entity ordering: sort by (type_order, id) — same as KGTriplesDataset.__init__
@@ -289,7 +289,7 @@ class ClinicalKG:
             "entity_labels": entity_labels,
             "relation_names": all_relation_names,
             "entity_type_names": [ENTITY_TYPE_ORDER[i] if i < len(ENTITY_TYPE_ORDER) else "Unknown" for i in range(len(ENTITY_TYPE_ORDER))],
-            "modality_names": ["CXR", "ECG", "RAD", "STR", "None"],
+            "modality_names": ["CXR", "ECG", "RAD", "STR", "ONTOLOGY", "None"],
             "entity_type_counts": self.entity_type_counts,
             "relation_type_counts": self.relation_type_counts,
         }

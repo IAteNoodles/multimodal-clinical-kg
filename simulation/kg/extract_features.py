@@ -396,6 +396,9 @@ def main():
         if modality == 'text':
             df = load_text_reports(data_dir)
             if not df.empty and 'text' in df.columns:
+                if 'study_id' in df.columns:
+                    df = df[df['study_id'].notna()].copy()
+                    df['study_id'] = df['study_id'].astype(int)
                 entity_ids = df['study_id'].tolist() if 'study_id' in df.columns else list(range(len(df)))
                 texts = df['text'].fillna('').tolist()
                 precompute_text_features(encoder, unifier, entity_ids, texts, output_dir, args.batch_size, device, max_length=args.max_length)
@@ -405,6 +408,9 @@ def main():
         elif modality == 'cxr':
             df = load_cxr_images(data_dir)
             if not df.empty and 'image_path' in df.columns:
+                if 'study_id' in df.columns:
+                    df = df[df['study_id'].notna()].copy()
+                    df['study_id'] = df['study_id'].astype(int)
                 entity_ids = df['study_id'].tolist() if 'study_id' in df.columns else list(range(len(df)))
                 paths = df['image_path'].tolist()
                 precompute_cxr_features(encoder, unifier, entity_ids, paths, output_dir, max(args.batch_size // 2, 8), device)

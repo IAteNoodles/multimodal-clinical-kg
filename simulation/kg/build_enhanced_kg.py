@@ -43,7 +43,7 @@ ENTITY_TYPE_TO_ID = {
 }
 ENTITY_TYPE_ORDER = ["Finding", "Anatomy", "Disease", "Patient", "Study", "Drug", "LabResult", "Procedure", "VitalResult", "ECGMeasurement", "ECGRhythm", "Unknown"]
 
-MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, None: 4}
+MODALITY_TO_ID = {"CXR": 0, "ECG": 1, "RAD": 2, "STR": 3, "ONTOLOGY": 4, None: 5}
 
 N_PATIENTS = 2000
 
@@ -1858,7 +1858,7 @@ def save_efficient_extended(kg: ClinicalKG, directory: Path) -> None:
         "entity_labels": entity_labels,
         "relation_names": all_relation_names,
         "entity_type_names": ENTITY_TYPE_ORDER,
-        "modality_names": ["CXR", "ECG", "RAD", "STR", "None"],
+        "modality_names": ["CXR", "ECG", "RAD", "STR", "ONTOLOGY", "None"],
         "entity_type_counts": kg.entity_type_counts,
         "relation_type_counts": kg.relation_type_counts,
         "enhanced": True,

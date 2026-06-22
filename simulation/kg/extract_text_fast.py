@@ -109,6 +109,9 @@ def main():
     df = pd.read_csv(data_dir / "text_reports.csv.gz", compression='gzip')
     print(f"Loaded {len(df)} text reports")
 
+    if 'study_id' in df.columns:
+        df = df[df['study_id'].notna()].copy()
+        df['study_id'] = df['study_id'].astype(int)
     entity_ids = df['study_id'].tolist() if 'study_id' in df.columns else list(range(len(df)))
     texts = df['text'].fillna('').str.strip().tolist()
     texts = [t if t else "no finding" for t in texts]
