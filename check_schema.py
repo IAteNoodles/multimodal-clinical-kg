@@ -1,9 +1,9 @@
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from google.cloud import bigquery
-import json
+import json, os
 
-token_path = r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\mimic_5k\token.json"
+token_path = os.environ.get("BQ_TOKEN_PATH", r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\mimic_5k\token.json")
 project_id = "physionet-data-498016"
 
 with open(token_path, 'r') as f:

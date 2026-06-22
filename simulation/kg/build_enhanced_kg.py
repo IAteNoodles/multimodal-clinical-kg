@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import pickle
 import re
 from collections import Counter, defaultdict
@@ -25,12 +26,12 @@ from extract_entities import (
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
-MRCONSO_PATH = Path(r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\umls-2026AA-mrconso\2026AA\META\MRCONSO.RRF")
-SNOMED_REL_PATH = Path(r"C:\Users\Noodl\Downloads\SnomedCT\SnomedCT_InternationalRF2_PRODUCTION_20260601T120000Z\Snapshot\Terminology\sct2_Relationship_Snapshot_INT_20260601.txt")
-SNOMED_DESC_PATH = Path(r"C:\Users\Noodl\Downloads\SnomedCT\SnomedCT_InternationalRF2_PRODUCTION_20260601T120000Z\Snapshot\Terminology\sct2_Description_Snapshot-en_INT_20260601.txt")
+MRCONSO_PATH = Path(os.environ.get("MRCONSO_PATH", r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\umls-2026AA-mrconso\2026AA\META\MRCONSO.RRF"))
+SNOMED_REL_PATH = Path(os.environ.get("SNOMED_REL_PATH", r"C:\Users\Noodl\Downloads\SnomedCT\SnomedCT_InternationalRF2_PRODUCTION_20260601T120000Z\Snapshot\Terminology\sct2_Relationship_Snapshot_INT_20260601.txt"))
+SNOMED_DESC_PATH = Path(os.environ.get("SNOMED_DESC_PATH", r"C:\Users\Noodl\Downloads\SnomedCT\SnomedCT_InternationalRF2_PRODUCTION_20260601T120000Z\Snapshot\Terminology\sct2_Description_Snapshot-en_INT_20260601.txt"))
 
-BQ_TOKEN_PATH = Path(r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\mimic_5k\token.json")
-BQ_CLIENT_SECRET_PATH = Path(r"C:\Users\Noodl\Projects\Research\Exploration-MJ\client_secret.json")
+BQ_TOKEN_PATH = Path(os.environ.get("BQ_TOKEN_PATH", r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\mimic_5k\token.json"))
+BQ_CLIENT_SECRET_PATH = Path(os.environ.get("BQ_CLIENT_SECRET_PATH", r"C:\Users\Noodl\Projects\Research\Exploration-MJ\client_secret.json"))
 BQ_PROJECT_ID = "physionet-data-498016"
 
 OUTPUT_DIR = DATA_DIR / "kg" / "data_new"
@@ -485,9 +486,9 @@ def _build_crosswalks() -> Dict[str, Any]:
                     cui_to_name[cui] = term
 
                 if sab == 'ICD10CM' and code:
-                    icd_to_cui[code] = cui
+                    icd_to_cui[f"{sab}:{code}"] = cui
                 if sab == 'ICD9CM' and code:
-                    icd_to_cui[code] = cui
+                    icd_to_cui[f"{sab}:{code}"] = cui
 
                 if sab == 'ICD10PCS' and code:
                     icd10pcs_to_cui[code] = cui
@@ -659,9 +660,9 @@ def extract_diagnoses_bq(kg: ClinicalKG, client, patient_ids: List[int],
     df['dis_id'] = 'DIS_' + df['long_title'].apply(_sanitize_name)
     df['long_title'] = df['long_title'].str[:100]
 
-    df['cui'] = None
-    mask_icd10 = df['icd_version'] == '10'
-    df.loc[mask_icd10, 'cui'] = df.loc[mask_icd10, 'icd_code'].map(icd_to_cui)
+    df['cui'] = df.apply(
+        lambda r: icd_to_cui.get(f"ICD{r['icd_version']}CM:{r['icd_code']}"), axis=1
+    )
 
     unique_pairs = df[['subject_id', 'dis_id', 'long_title']].drop_duplicates(subset=['subject_id', 'dis_id'])
 
@@ -1203,7 +1204,7 @@ def extract_procedures_bq(kg: ClinicalKG, client, patient_ids: List[int],
         icd10_codes = df[df['icd_version'] == '10'][['icd_code']].drop_duplicates()
         rel_edges = 0
         for _, row in icd10_codes.iterrows():
-            cui = icd_to_cui.get(row['icd_code']) or icd10pcs_to_cui.get(row['icd_code'])
+            cui = icd_to_cui.get(f"ICD10CM:{row['icd_code']}") or icd10pcs_to_cui.get(row['icd_code'])
             if not cui:
                 continue
             snomed_id = cui_to_snomed.get(cui)
@@ -1239,7 +1240,7 @@ def build_drug_disease_edges(kg: ClinicalKG, client, patient_ids: List[int],
         "contraindicated_with_disease": "contraindicated",
     }
 
-    csv_path = Path(r"C:\Users\Noodl\Projects\Research\MultiModal\bq_results\mrrel_mimic_drug_disease_filtered.csv")
+    csv_path = Path(os.environ.get("MRREL_DRUG_DISEASE_CSV", r"C:\Users\Noodl\Projects\Research\MultiModal\bq_results\mrrel_mimic_drug_disease_filtered.csv"))
 
     icd_to_cui = crosswalks.get("icd_to_cui", {})
     cui_to_name = crosswalks.get("cui_to_name", {})
@@ -1320,8 +1321,8 @@ def build_drug_disease_edges(kg: ClinicalKG, client, patient_ids: List[int],
     cui_to_dis_entity: Dict[str, str] = {}
     for icd_key, dis_id in icd_to_dis_name.items():
         if dis_id in kg.entities:
-            icd_code = icd_key.rsplit('_', 1)[0]
-            cui = icd_to_cui.get(icd_code)
+            icd_code, icd_version = icd_key.rsplit('_', 1)
+            cui = icd_to_cui.get(f"ICD{icd_version}CM:{icd_code}")
             if cui:
                 cui_to_dis_entity[cui] = dis_id
 
@@ -1437,26 +1438,39 @@ def build_snomed_disease_hierarchy(kg: ClinicalKG, crosswalks: Dict[str, Any]) -
 
 
 def build_temporal_edges_bq(kg: ClinicalKG, client, patient_ids: List[int],
-                            diag_df: Optional[pd.DataFrame] = None) -> None:
+                            diag_df: Optional[pd.DataFrame] = None,
+                            admissions_df: Optional[pd.DataFrame] = None,
+                            lab_df: Optional[pd.DataFrame] = None,
+                            vit_df: Optional[pd.DataFrame] = None,
+                            rx_df: Optional[pd.DataFrame] = None,
+                            proc_df: Optional[pd.DataFrame] = None) -> None:
     print("Building temporal edges from BigQuery...")
     id_list = ','.join(str(x) for x in patient_ids)
 
-    print("  Querying BigQuery for admissions...")
-    sql_adm = f"""
-    SELECT subject_id, hadm_id, admittime, dischtime
-    FROM `physionet-data.mimiciv_3_1_hosp.admissions`
-    WHERE subject_id IN ({id_list})
-    """
-    admissions = _bq_query(client, sql_adm)
-    print(f"  Got {len(admissions)} admission rows from BigQuery")
-    if admissions.empty:
-        print("  No admission data returned")
-        return
+    if admissions_df is not None and not admissions_df.empty:
+        print("  Using passed admissions DataFrame for temporal edges...")
+        admissions = admissions_df.copy()
+        admissions['subject_id'] = admissions['subject_id'].astype(int)
+        admissions['hadm_id'] = admissions['hadm_id'].astype(int)
+        admissions['admittime'] = admissions['admittime'].apply(_parse_datetime)
+        admissions['dischtime'] = admissions['dischtime'].apply(_parse_datetime)
+    else:
+        print("  Querying BigQuery for admissions...")
+        sql_adm = f"""
+        SELECT subject_id, hadm_id, admittime, dischtime
+        FROM `physionet-data.mimiciv_3_1_hosp.admissions`
+        WHERE subject_id IN ({id_list})
+        """
+        admissions = _bq_query(client, sql_adm)
+        print(f"  Got {len(admissions)} admission rows from BigQuery")
+        if admissions.empty:
+            print("  No admission data returned")
+            return
 
-    admissions['subject_id'] = admissions['subject_id'].astype(int)
-    admissions['hadm_id'] = admissions['hadm_id'].astype(int)
-    admissions['admittime'] = admissions['admittime'].apply(_parse_datetime)
-    admissions['dischtime'] = admissions['dischtime'].apply(_parse_datetime)
+        admissions['subject_id'] = admissions['subject_id'].astype(int)
+        admissions['hadm_id'] = admissions['hadm_id'].astype(int)
+        admissions['admittime'] = admissions['admittime'].apply(_parse_datetime)
+        admissions['dischtime'] = admissions['dischtime'].apply(_parse_datetime)
 
     # Vectorized: build hadm_times lookup
     hadm_times: Dict[int, Tuple[Optional[datetime], Optional[datetime]]] = dict(zip(
@@ -1499,17 +1513,21 @@ def build_temporal_edges_bq(kg: ClinicalKG, client, patient_ids: List[int],
     # Lab events
     clinical_itemids = list(CLINICAL_LABS.keys())
     itemid_str = ','.join(str(x) for x in clinical_itemids)
-    print("  Querying BigQuery for lab events (temporal)...")
-    sql_lab = f"""
-    SELECT subject_id, hadm_id, itemid, charttime, valuenum, ref_range_lower, ref_range_upper
-    FROM `physionet-data.mimiciv_3_1_hosp.labevents`
-    WHERE subject_id IN ({id_list})
-    AND itemid IN ({itemid_str})
-    AND valuenum IS NOT NULL
-    LIMIT 500000
-    """
-    lab_df = _bq_query(client, sql_lab)
-    print(f"  Got {len(lab_df)} lab event rows from BigQuery (temporal)")
+    if lab_df is not None and not lab_df.empty:
+        print("  Using passed lab events DataFrame for temporal edges...")
+        lab_df = lab_df.copy()
+    else:
+        print("  Querying BigQuery for lab events (temporal)...")
+        sql_lab = f"""
+        SELECT subject_id, hadm_id, itemid, charttime, valuenum, ref_range_lower, ref_range_upper
+        FROM `physionet-data.mimiciv_3_1_hosp.labevents`
+        WHERE subject_id IN ({id_list})
+        AND itemid IN ({itemid_str})
+        AND valuenum IS NOT NULL
+        LIMIT 500000
+        """
+        lab_df = _bq_query(client, sql_lab)
+        print(f"  Got {len(lab_df)} lab event rows from BigQuery (temporal)")
     if not lab_df.empty:
         lab_df['subject_id'] = lab_df['subject_id'].astype(int)
         lab_df['itemid'] = lab_df['itemid'].astype(int)
@@ -1547,28 +1565,34 @@ def build_temporal_edges_bq(kg: ClinicalKG, client, patient_ids: List[int],
                 event_frames.append(lab_all[['subject_id', 'hadm_id', 'timestamp', 'entity_id']])
 
     # Vital signs
-    vital_dataset = _resolve_bq_dataset(client, "physionet-data", ["mimiciv_3_1_derived", "mimiciv_derived"])
-    real_vital_cols = {"heart_rate", "sbp", "dbp", "mbp", "sbp_ni", "dbp_ni", "mbp_ni",
-                       "resp_rate", "temperature", "spo2", "glucose"}
-    all_vital_cols = set()
-    for aliases in VITAL_COLUMN_ALIASES.values():
-        for a in aliases:
-            if a in real_vital_cols:
-                all_vital_cols.add(a)
-    vital_col_str = ', '.join(sorted(all_vital_cols))
-    print("  Querying BigQuery for vital signs (temporal)...")
-    sql_vit = f"""
-    SELECT v.subject_id, i.hadm_id, v.charttime, {vital_col_str}
-    FROM `physionet-data.{vital_dataset}.vitalsign` v
-    LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i
-    ON v.stay_id = i.stay_id
-    WHERE v.subject_id IN ({id_list})
-    LIMIT 500000
-    """
-    vit_df = _bq_query(client, sql_vit)
-    print(f"  Got {len(vit_df)} vital sign rows from BigQuery (temporal)")
+    if vit_df is not None and not vit_df.empty:
+        print("  Using passed vital signs DataFrame for temporal edges...")
+        vit_df = vit_df.copy()
+    else:
+        vital_dataset = _resolve_bq_dataset(client, "physionet-data", ["mimiciv_3_1_derived", "mimiciv_derived"])
+        real_vital_cols = {"heart_rate", "sbp", "dbp", "mbp", "sbp_ni", "dbp_ni", "mbp_ni",
+                           "resp_rate", "temperature", "spo2", "glucose"}
+        all_vital_cols = set()
+        for aliases in VITAL_COLUMN_ALIASES.values():
+            for a in aliases:
+                if a in real_vital_cols:
+                    all_vital_cols.add(a)
+        vital_col_str = ', '.join(sorted(all_vital_cols))
+        print("  Querying BigQuery for vital signs (temporal)...")
+        sql_vit = f"""
+        SELECT v.subject_id, i.hadm_id, v.charttime, {vital_col_str}
+        FROM `physionet-data.{vital_dataset}.vitalsign` v
+        LEFT JOIN `physionet-data.mimiciv_3_1_icu.icustays` i
+        ON v.stay_id = i.stay_id
+        WHERE v.subject_id IN ({id_list})
+        LIMIT 500000
+        """
+        vit_df = _bq_query(client, sql_vit)
+        print(f"  Got {len(vit_df)} vital sign rows from BigQuery (temporal)")
     if not vit_df.empty:
         vit_df['subject_id'] = vit_df['subject_id'].astype(int)
+        if 'hadm_id' not in vit_df.columns:
+            vit_df['hadm_id'] = pd.NA
 
         for canonical, aliases in VITAL_COLUMN_ALIASES.items():
             for alias in aliases:
@@ -1599,54 +1623,75 @@ def build_temporal_edges_bq(kg: ClinicalKG, client, patient_ids: List[int],
                 event_frames.append(vit_all[['subject_id', 'hadm_id', 'timestamp', 'entity_id']])
 
     # Medications
-    print("  Querying BigQuery for prescriptions (temporal)...")
-    sql_rx = f"""
-    SELECT subject_id, hadm_id, drug, starttime
-    FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`
-    WHERE subject_id IN ({id_list})
-    AND drug IS NOT NULL
-    LIMIT 500000
-    """
-    rx_df = _bq_query(client, sql_rx)
-    print(f"  Got {len(rx_df)} prescription rows from BigQuery (temporal)")
+    if rx_df is not None and not rx_df.empty:
+        print("  Using passed prescriptions DataFrame for temporal edges...")
+        rx_df = rx_df.copy()
+    else:
+        print("  Querying BigQuery for prescriptions (temporal)...")
+        sql_rx = f"""
+        SELECT subject_id, hadm_id, drug, starttime
+        FROM `physionet-data.mimiciv_3_1_hosp.prescriptions`
+        WHERE subject_id IN ({id_list})
+        AND drug IS NOT NULL
+        LIMIT 500000
+        """
+        rx_df = _bq_query(client, sql_rx)
+        print(f"  Got {len(rx_df)} prescription rows from BigQuery (temporal)")
     if not rx_df.empty:
         rx_df['subject_id'] = rx_df['subject_id'].astype(int)
-        rx_df['drug_str'] = rx_df['drug'].astype(str).str.strip()
-        rx_df = rx_df[rx_df['drug_str'] != '']
-        rx_df['entity_id'] = 'DRG_' + rx_df['drug_str'].apply(_sanitize_name)
+        if 'drug_str' not in rx_df.columns:
+            rx_df['drug_str'] = rx_df['drug'].astype(str).str.strip()
+            rx_df = rx_df[rx_df['drug_str'] != '']
+        if 'entity_id' not in rx_df.columns:
+            if 'drg_id' in rx_df.columns:
+                rx_df['entity_id'] = rx_df['drg_id']
+            else:
+                rx_df['entity_id'] = 'DRG_' + rx_df['drug_str'].apply(_sanitize_name)
         rx_df = rx_df[rx_df['entity_id'].isin(kg.entities)]
-        rx_df['timestamp'] = rx_df['starttime'].apply(_parse_datetime)
+        if 'starttime' in rx_df.columns:
+            rx_df['timestamp'] = rx_df['starttime'].apply(_parse_datetime)
+        else:
+            rx_df['timestamp'] = rx_df['hadm_id'].map(lambda h: hadm_times.get(h, (None, None))[0])
         rx_df = rx_df.dropna(subset=['timestamp'])
         rx_df['hadm_id'] = rx_df['hadm_id'].fillna(0).astype(int)
         if not rx_df.empty:
             event_frames.append(rx_df[['subject_id', 'hadm_id', 'timestamp', 'entity_id']])
 
     # Procedures
-    print("  Querying BigQuery for procedures (temporal)...")
-    sql_proc = f"""
-    SELECT p.subject_id, p.hadm_id, p.icd_code, p.icd_version
-    FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p
-    WHERE p.subject_id IN ({id_list})
-    """
-    proc_df = _bq_query(client, sql_proc)
-    print(f"  Got {len(proc_df)} procedure rows from BigQuery (temporal)")
+    if proc_df is not None and not proc_df.empty:
+        print("  Using passed procedures DataFrame for temporal edges...")
+        proc_df = proc_df.copy()
+    else:
+        print("  Querying BigQuery for procedures (temporal)...")
+        sql_proc = f"""
+        SELECT p.subject_id, p.hadm_id, p.icd_code, p.icd_version
+        FROM `physionet-data.mimiciv_3_1_hosp.procedures_icd` p
+        WHERE p.subject_id IN ({id_list})
+        """
+        proc_df = _bq_query(client, sql_proc)
+        print(f"  Got {len(proc_df)} procedure rows from BigQuery (temporal)")
     if not proc_df.empty:
         proc_df['subject_id'] = proc_df['subject_id'].astype(int)
         proc_df['icd_code'] = proc_df['icd_code'].astype(str)
         proc_df['icd_version'] = proc_df['icd_version'].astype(str)
-        print("  Querying BigQuery for procedure ICD titles (temporal)...")
-        sql_d = "SELECT icd_code, icd_version, long_title FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`"
-        d_icd = _bq_query(client, sql_d)
-        icd_lookup: Dict[Tuple[str, str], str] = {}
-        if not d_icd.empty:
-            d_icd['icd_code'] = d_icd['icd_code'].astype(str)
-            d_icd['icd_version'] = d_icd['icd_version'].astype(str)
-            d_icd['long_title'] = d_icd['long_title'].astype(str)
-            icd_lookup = dict(zip(zip(d_icd['icd_version'], d_icd['icd_code']), d_icd['long_title']))
-        proc_df['proc_name'] = proc_df.apply(
-            lambda r: icd_lookup.get((r['icd_version'], r['icd_code']), f"ICD_Proc_{r['icd_code']}"), axis=1
-        )
-        proc_df['entity_id'] = 'PRC_' + proc_df['proc_name'].apply(_sanitize_name)
+        if 'proc_name' not in proc_df.columns:
+            print("  Querying BigQuery for procedure ICD titles (temporal)...")
+            sql_d = "SELECT icd_code, icd_version, long_title FROM `physionet-data.mimiciv_3_1_hosp.d_icd_procedures`"
+            d_icd = _bq_query(client, sql_d)
+            icd_lookup: Dict[Tuple[str, str], str] = {}
+            if not d_icd.empty:
+                d_icd['icd_code'] = d_icd['icd_code'].astype(str)
+                d_icd['icd_version'] = d_icd['icd_version'].astype(str)
+                d_icd['long_title'] = d_icd['long_title'].astype(str)
+                icd_lookup = dict(zip(zip(d_icd['icd_version'], d_icd['icd_code']), d_icd['long_title']))
+            proc_df['proc_name'] = proc_df.apply(
+                lambda r: icd_lookup.get((r['icd_version'], r['icd_code']), f"ICD_Proc_{r['icd_code']}"), axis=1
+            )
+        if 'entity_id' not in proc_df.columns:
+            if 'prc_id' in proc_df.columns:
+                proc_df['entity_id'] = proc_df['prc_id']
+            else:
+                proc_df['entity_id'] = 'PRC_' + proc_df['proc_name'].apply(_sanitize_name)
         proc_df = proc_df[proc_df['entity_id'].isin(kg.entities)]
         proc_df['timestamp'] = proc_df['hadm_id'].map(lambda h: hadm_times.get(h, (None, None))[0])
         proc_df = proc_df.dropna(subset=['timestamp'])
@@ -1874,13 +1919,14 @@ def build_enhanced_kg(data_dir: Optional[Path] = None, output_dir: Optional[Path
 
     diag_df = extract_diagnoses_bq(kg, client, patient_ids, crosswalks)
     rx_df = extract_medications_bq(kg, client, patient_ids, crosswalks)
-    extract_lab_results_bq(kg, client, patient_ids)
-    extract_vital_signs_bq(kg, client, patient_ids)
+    lab_df = extract_lab_results_bq(kg, client, patient_ids)
+    vit_df = extract_vital_signs_bq(kg, client, patient_ids)
     ecg_df = extract_ecg_measurements_bq(kg, client, patient_ids)
-    extract_procedures_bq(kg, client, patient_ids, crosswalks)
+    proc_df = extract_procedures_bq(kg, client, patient_ids, crosswalks)
     build_drug_disease_edges(kg, client, patient_ids, crosswalks, diag_df, rx_df)
     build_snomed_disease_hierarchy(kg, crosswalks)
-    build_temporal_edges_bq(kg, client, patient_ids, diag_df=diag_df)
+    build_temporal_edges_bq(kg, client, patient_ids, diag_df=diag_df, rx_df=rx_df,
+                            lab_df=lab_df, vit_df=vit_df, proc_df=proc_df)
     ensure_patient_finding_edges(kg, data_dir)
 
     # Phase 3: Save

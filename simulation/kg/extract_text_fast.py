@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch import FloatTensor, LongTensor
 
 
-def extract_text_features_fast(texts, entity_ids, output_dir, batch_size=256, max_length=128, device='cuda', feature_dim=256):
+def extract_text_features_fast(texts, entity_ids, output_dir, batch_size=256, max_length=128, device='cuda', feature_dim=256, precision='float32'):
     from transformers import AutoTokenizer, AutoModel
 
     print(f"[Text] Loading ClinicalBERT...")
@@ -15,7 +15,15 @@ def extract_text_features_fast(texts, entity_ids, output_dir, batch_size=256, ma
     model = AutoModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     model = model.to(device).eval()
 
+    proj_weights_path = output_dir / "text_projection.pt"
     proj = nn.Linear(768, feature_dim).to(device)
+    if proj_weights_path.exists():
+        proj.load_state_dict(torch.load(proj_weights_path, map_location=device))
+    else:
+        torch.manual_seed(42)
+        torch.nn.init.xavier_uniform_(proj.weight)
+        torch.nn.init.zeros_(proj.bias)
+        torch.save(proj.state_dict(), proj_weights_path)
 
     feat_file = output_dir / "text_features.npy"
     id_file = output_dir / "text_feature_ids.csv"
@@ -44,7 +52,11 @@ def extract_text_features_fast(texts, entity_ids, output_dir, batch_size=256, ma
                 out = model(input_ids=input_ids, attention_mask=attention_mask)
                 mask_exp = attention_mask.unsqueeze(-1).float()
                 pooled = (out.last_hidden_state * mask_exp).sum(1) / mask_exp.sum(1).clamp(min=1)
-                feats = proj(pooled).cpu().half()
+                feats = proj(pooled).cpu()
+                if precision == 'float16':
+                    feats = feats.half()
+                else:
+                    feats = feats.float()
 
             all_features.append(feats.numpy())
             all_ids.extend(entity_ids[i0:i1])
@@ -60,7 +72,8 @@ def extract_text_features_fast(texts, entity_ids, output_dir, batch_size=256, ma
                 eta = (n - done) / rate
                 print(f"  batch {batch_idx}/{total_batches} ({pct:.0f}%, {rate:.0f} texts/s, ETA {eta:.0f}s)")
 
-    features_np = np.concatenate(all_features, axis=0).astype(np.float16)
+    dtype = np.float16 if precision == 'float16' else np.float32
+    features_np = np.concatenate(all_features, axis=0).astype(dtype)
     np.save(feat_file, features_np)
 
     with open(id_file, 'w', newline='') as id_f:
@@ -85,6 +98,7 @@ def main():
     parser.add_argument('--max-length', type=int, default=128)
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--feature-dim', type=int, default=256)
+    parser.add_argument('--precision', type=str, default='float32', choices=['float32', 'float16'])
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -105,6 +119,7 @@ def main():
         max_length=args.max_length,
         device=args.device,
         feature_dim=args.feature_dim,
+        precision=args.precision,
     )
 
 

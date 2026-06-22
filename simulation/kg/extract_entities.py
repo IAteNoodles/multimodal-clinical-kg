@@ -738,14 +738,17 @@ def build_same_patient_edges(kg: ClinicalKG, chexpert_df: pd.DataFrame, data_dir
                 count += 1
     print(f"  Added {count} same_patient edges from CXR")
 
+    finding_to_patient: Dict[str, str] = {}
+    for rel in kg.relations:
+        if rel.relation == "has_finding":
+            finding_to_patient[rel.tail] = rel.head
+
     ecg_patient_studies: Dict[str, List[str]] = defaultdict(list)
     for rel in kg.relations:
         if rel.relation == "finding_of" and rel.tail.startswith("STY_PTBECG"):
-            study_id = rel.tail
-            for fnd_rel in kg.relations:
-                if fnd_rel.relation == "has_finding" and fnd_rel.tail == rel.head:
-                    ecg_patient_studies[fnd_rel.head].append(study_id)
-                    break
+            patient = finding_to_patient.get(rel.head)
+            if patient is not None:
+                ecg_patient_studies[patient].append(rel.tail)
 
     ecg_count = 0
     for pat_id, studies in ecg_patient_studies.items():

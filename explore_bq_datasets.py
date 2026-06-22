@@ -3,8 +3,9 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from google.cloud import bigquery
 from pathlib import Path
+import os
 
-BQ_TOKEN_PATH = Path(r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\mimic_5k\token.json")
+BQ_TOKEN_PATH = Path(os.environ.get("BQ_TOKEN_PATH", r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\mimic_5k\token.json"))
 BQ_PROJECT_ID = "physionet-data-498016"
 
 def get_bq_client():

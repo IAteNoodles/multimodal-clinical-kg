@@ -3,7 +3,7 @@ from google.auth.transport.requests import Request
 from google.cloud import bigquery
 import json, csv, os
 
-token_path = r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\mimic_5k\token.json"
+token_path = os.environ.get("BQ_TOKEN_PATH", r"C:\Users\Noodl\Projects\Research\Exploration-MJ\data\mimic_5k\token.json")
 project_id = "physionet-data-498016"
 
 with open(token_path, 'r') as f:
@@ -44,7 +44,7 @@ ORDER BY category, label
 """
 }
 
-out_dir = r"C:\Users\Noodl\Projects\Research\MultiModal\bq_results"
+out_dir = os.environ.get("BQ_RESULTS_DIR", r"C:\Users\Noodl\Projects\Research\MultiModal\bq_results")
 os.makedirs(out_dir, exist_ok=True)
 
 for name, sql in queries.items():
