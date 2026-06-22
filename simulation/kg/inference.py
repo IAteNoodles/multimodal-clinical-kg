@@ -179,11 +179,6 @@ def load_entity_features(
                 entity_name = row[0]
                 kg_id = dataset.entity2id.get(entity_name)
                 if kg_id is None:
-                    for prefix in ("STY_", "PAT_PTB", "PAT_"):
-                        kg_id = dataset.entity2id.get(f"{prefix}{entity_name}")
-                        if kg_id is not None:
-                            break
-                if kg_id is None:
                     continue
                 matched += 1
                 feat = features_tensor[row_idx]

@@ -1007,8 +1007,7 @@ def _add_disease_mediated_edges(kg: ClinicalKG) -> None:
     disease_parents: Dict[str, Set[str]] = defaultdict(set)
     for rel in kg.relations:
         if rel.relation == "subsumes":
-            disease_children[rel.tail].add(rel.head)  # tail is parent, head is child
-            disease_parents[rel.head].add(rel.tail)
+            disease_parents[rel.tail].add(rel.head)
 
     # Transitive closure: for each disease, find all ancestors
     def get_ancestors(disease: str, visited: Optional[Set[str]] = None) -> Set[str]:

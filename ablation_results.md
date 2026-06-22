@@ -162,7 +162,7 @@ After fixing, re-run ablations. If the pattern reverses (auxiliary components he
 - `ckpts/cascade_ablation_no_modality/` — no_modality ablation (test MRR=0.8308)
 - `simulation/kg/models.py` — Model code (`MultimodalCASCADEModel` at line 688)
 - `simulation/kg/train_manual.py` — Training script
-- `simulation/kg/run_ablation.bat` — Ablation run script (no_pid, no_type, no_modality only)
+- `run_ablation.bat` — Ablation run script (no_pid, no_type, no_modality only)
 - `verify_scaling.py` — Scaling mismatch verification script
 - `.opencode/summaries/models_deep_analysis.md` — Full model code analysis
 - `.opencode/summaries/train_manual_deep_analysis.md` — Full training code analysis

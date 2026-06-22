@@ -1374,7 +1374,9 @@ def build_drug_disease_edges(kg: ClinicalKG, client, patient_ids: List[int],
                 if drug_eid not in kg.entities or dis_eid not in kg.entities:
                     continue
 
-                rel_name = RELA_TO_RELATION.get(rela, "treats")
+                rel_name = RELA_TO_RELATION.get(rela)
+                if rel_name is None:
+                    continue
                 kg.add_relation(Relation(head=drug_eid, relation=rel_name, tail=dis_eid, weight=1.0, source="umls"))
                 ontology_edges += 1
                 edge_counts[rel_name] += 1

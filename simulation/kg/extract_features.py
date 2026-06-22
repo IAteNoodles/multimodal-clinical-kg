@@ -96,7 +96,7 @@ def load_structured_features(data_dir: Path):
     data = np.load(feat_path)
     features = data['features'] if 'features' in data else data[data.files[0]]
     ids_df = pd.read_csv(id_path)
-    ids = ids_df['patient_id'].tolist() if 'patient_id' in ids_df.columns else ids_df.iloc[:, 0].tolist()
+    ids = [f"PAT_{int(id)}" for id in (ids_df['patient_id'].tolist() if 'patient_id' in ids_df.columns else ids_df.iloc[:, 0].tolist())]
     return ids, features
 
 
@@ -399,7 +399,7 @@ def main():
                 if 'study_id' in df.columns:
                     df = df[df['study_id'].notna()].copy()
                     df['study_id'] = df['study_id'].astype(int)
-                entity_ids = df['study_id'].tolist() if 'study_id' in df.columns else list(range(len(df)))
+                entity_ids = [f"STY_{int(id)}" for id in df['study_id'].tolist()] if 'study_id' in df.columns else list(range(len(df)))
                 texts = df['text'].fillna('').tolist()
                 precompute_text_features(encoder, unifier, entity_ids, texts, output_dir, args.batch_size, device, max_length=args.max_length)
             else:
@@ -411,7 +411,7 @@ def main():
                 if 'study_id' in df.columns:
                     df = df[df['study_id'].notna()].copy()
                     df['study_id'] = df['study_id'].astype(int)
-                entity_ids = df['study_id'].tolist() if 'study_id' in df.columns else list(range(len(df)))
+                entity_ids = [f"STY_{int(id)}" for id in df['study_id'].tolist()] if 'study_id' in df.columns else list(range(len(df)))
                 paths = df['image_path'].tolist()
                 precompute_cxr_features(encoder, unifier, entity_ids, paths, output_dir, max(args.batch_size // 2, 8), device)
             else:
@@ -426,7 +426,7 @@ def main():
                 else:
                     print("  [WARN] No waveform_path column, constructing from file naming convention")
                     base = data_dir.parent / "ptb_xl" / "ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3"
-                    paths = [str(base / f"HR{str(eid).zfill(5)}.dat") for eid in entity_ids]
+                    paths = [str(base / f"HR{int(e):05d}.dat") for e in df['ecg_id'].tolist()]
                 precompute_ecg_features(encoder, unifier, entity_ids, paths, output_dir, args.batch_size, device)
             else:
                 print("  Skipping ECG: no data")

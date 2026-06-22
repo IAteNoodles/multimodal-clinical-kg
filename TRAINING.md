@@ -92,7 +92,7 @@ python -u simulation/kg/train_manual.py \
 
 ## Results
 
-Test metrics, best model weights, and training logs are saved under `results/{config}_seed{seed}/`.
+Test metrics, best model weights, and training logs are saved under `ckpts/ablation/{name}/`.
 
 ## Known Issues
 

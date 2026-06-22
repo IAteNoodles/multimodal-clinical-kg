@@ -439,7 +439,7 @@ def train_model(
     if active_modalities is not None:
         print(f"Active modalities: {', '.join(sorted(active_modalities))}")
 
-    ema = EMA(model, decay=0.999) if device.type == 'cuda' else None
+    ema = EMA(model, decay=0.999) if (not args.no_ema and device.type == 'cuda') else None
     if device.type == 'cuda':
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
@@ -583,6 +583,10 @@ def train_model(
                         model.clamp_embed_norm(max_norm=args.embed_max_norm)
                     optimizer.step()
                 scheduler.step()
+                if args.swa and epoch >= swa_start_epoch and args.swa_lr > 0:
+                    swa_lr = args.swa_lr * args.lr
+                    for pg in optimizer.param_groups:
+                        pg['lr'] = swa_lr
                 global_step += 1
                 if global_step % 50 == 0:
                     _safe_empty_cache()
