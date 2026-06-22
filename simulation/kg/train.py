@@ -874,12 +874,14 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset, feature_dir
         model = ComplExModel(num_ents, num_rels, embed_dim, dropout=args.dropout)
     elif args.model == 'cascade':
         ablation = getattr(args, 'ablation', None)
+        cross_modal_rel_ids = [dataset.relation2id[r] for r in CROSS_MODAL_RELATIONS if r in dataset.relation2id]
         model = CASCADEKGModel(
             num_ents, num_rels, args.embed_dim,
             num_entity_types=len(ENTITY_TYPE_TO_ID),
             num_modalities=len(MODALITY_TO_ID),
             ablation=ablation,
             dropout=args.dropout,
+            cross_modal_relations=cross_modal_rel_ids,
         )
     elif args.model == 'multimodal_complex':
         modalities = MODALITY_SET_MAP.get(args.modalities, {"text"})
@@ -916,9 +918,9 @@ def build_model(args: argparse.Namespace, dataset: KGTriplesDataset, feature_dir
         raise ValueError(f"Unknown model: {args.model}")
 
     if hasattr(model, 'set_precomputed_features'):
-        if feature_dir is not None:
-            entity_features = load_entity_features(feature_dir, dataset)
-            model.set_precomputed_features(entity_features)
+        feats = load_entity_features(feature_dir, dataset) if (feature_dir and Path(feature_dir).exists()) else {}
+        if feats:
+            model.set_precomputed_features(feats)
         else:
             model.precompute_features = False
 
