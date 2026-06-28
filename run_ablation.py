@@ -14,9 +14,9 @@ BASE = [
 ]
 
 MODELS = [
-    ("transE", 38000, False),
-    ("complex", 1024, False),
-    ("multimodal_cascade", 512, True),
+    ("transE", 38000, False, {"--lr": "3e-4", "--weight-decay": "1e-3", "--n3-weight": "0.0"}),
+    ("complex", 18000, False, {"--lr": "1e-3", "--weight-decay": "0", "--n3-weight": "0.0"}),
+    ("multimodal_cascade", 512, True, {"--lr": "3e-4", "--weight-decay": "1e-5", "--n3-weight": "0.01"}),
 ]
 
 ABLATIONS = ["full", "no_pid", "no_type", "no_modality"]
@@ -35,7 +35,7 @@ def log(msg):
 
 log(f"=== started ===")
 
-for model, bs, has_ablations in MODELS:
+for model, bs, has_ablations, overrides in MODELS:
     if has_ablations:
         for ablation in ABLATIONS:
             for seed in SEEDS:
@@ -51,6 +51,8 @@ for model, bs, has_ablations in MODELS:
                     "--model", model, "--batch-size", str(bs),
                     "--seed", str(seed), "--checkpoint-dir", str(ckpt),
                 ]
+                for k, v in overrides.items():
+                    cmd += [k, v]
                 if ablation != "full":
                     cmd += ["--ablation", ablation]
 
@@ -81,6 +83,8 @@ for model, bs, has_ablations in MODELS:
                 "--model", model, "--batch-size", str(bs),
                 "--seed", str(seed), "--checkpoint-dir", str(ckpt),
             ]
+            for k, v in overrides.items():
+                cmd += [k, v]
 
             if ckpt.exists():
                 cmd.append("--resume")
