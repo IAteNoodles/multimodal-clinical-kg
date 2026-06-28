@@ -112,7 +112,7 @@ def main():
     if 'study_id' in df.columns:
         df = df[df['study_id'].notna()].copy()
         df['study_id'] = df['study_id'].astype(int)
-    entity_ids = df['study_id'].tolist() if 'study_id' in df.columns else list(range(len(df)))
+    entity_ids = [f"STY_{int(id)}" for id in df['study_id'].tolist()] if 'study_id' in df.columns else list(range(len(df)))
     texts = df['text'].fillna('').str.strip().tolist()
     texts = [t if t else "no finding" for t in texts]
 

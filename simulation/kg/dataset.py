@@ -436,11 +436,6 @@ class KGTriplesDataset:
                     entity_name = row[0]
                     kg_id = self.entity2id.get(entity_name)
                     if kg_id is None:
-                        for prefix in ("STY_", "PAT_PTB", "PAT_"):
-                            kg_id = self.entity2id.get(f"{prefix}{entity_name}")
-                            if kg_id is not None:
-                                break
-                    if kg_id is None:
                         skipped += 1
                         continue
                     id_map[kg_id] = features_tensor[row_idx]

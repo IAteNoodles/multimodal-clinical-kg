@@ -82,6 +82,7 @@ def save_checkpoint(path, model, opt, sched, scaler, global_step, ep, metrics=No
 def load_checkpoint(path, model, opt, sched, scaler, device):
     model_path = path.with_name("model.pt")
     meta_path = path.with_name("meta.json")
+    _ep, _gs = 0, 0
     if model_path.exists():
         sd = torch.load(model_path, map_location=device, weights_only=True)
         model.load_state_dict(sd)
@@ -104,6 +105,7 @@ def load_checkpoint(path, model, opt, sched, scaler, device):
             torch.set_rng_state(ckpt['rng_torch'])
         if 'rng_cuda' in ckpt and ckpt['rng_cuda'] is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(ckpt['rng_cuda'])
+        _ep, _gs = ckpt.get('ep', 0), ckpt.get('global_step', 0)
         del ckpt, sd
     gc.collect()
     torch.cuda.empty_cache()
@@ -111,7 +113,7 @@ def load_checkpoint(path, model, opt, sched, scaler, device):
         with open(meta_path) as f:
             meta = json.load(f)
         return meta["ep"], meta["global_step"], meta.get("metrics", {})
-    return 0, 0, {}
+    return _ep, _gs, {}
 
 
 def load_best_weights(model, ckpt_dir, device):
@@ -142,10 +144,11 @@ def run_test_eval(model, evaluator, dataset, args, device, entity_type_ids=None,
     test_t, test_w = test_t.to(device), test_w.to(device)
     test_metrics = evaluator.evaluate(
         model, test_t, test_w,
-        batch_size=min(args.eval_batch_size, 4096),
-        max_triples=None,
+        batch_size=min(args.eval_batch_size, 1024),
+        max_triples=args.max_test_triples,
         num_eval_negatives=args.num_eval_negatives,
         full_rank=True,
+        full_rank_chunk_size=args.eval_chunk_size,
         entity_type_ids=entity_type_ids if _needs_modality_ids(model) else None,
         entity_modality_ids=entity_modality_ids if _needs_modality_ids(model) else None,
     )
@@ -227,6 +230,8 @@ def train(args):
             if test_metrics:
                 with open(ckpt_dir / "test_results.json", 'w') as f:
                     json.dump(test_metrics, f)
+                with open(ckpt_dir / "meta.json", 'w') as f:
+                    json.dump({"ep": 0, "global_step": 0, "metrics": test_metrics}, f)
         return
 
     if start_ep >= args.epochs and not args.eval_only:
@@ -305,20 +310,28 @@ def train(args):
         if args.eval and ep % args.eval_every_epochs == 0:
             if evaluator is None:
                 evaluator = LinkPredictionEvaluator(dataset, device=device)
+            model.zero_grad(set_to_none=True)
+            gc.collect()
+            torch.cuda.empty_cache()
             val_t, val_w = dataset.get_val_triples()
             val_t, val_w = val_t.to(device), val_w.to(device)
             val_metrics = evaluator.evaluate(
                 model, val_t, val_w,
-                batch_size=min(args.eval_batch_size, 4096),
+                batch_size=min(args.eval_batch_size, 1024),
                 max_triples=args.max_eval_triples,
                 num_eval_negatives=args.num_eval_negatives,
                 full_rank=True,
+                full_rank_chunk_size=args.eval_chunk_size,
                 entity_type_ids=entity_type_ids if _needs_modality_ids(model) else None,
                 entity_modality_ids=entity_modality_ids if _needs_modality_ids(model) else None,
             )
             ep_metrics.update(val_metrics)
             mrr = val_metrics.get("MRR", 0.0)
             print(f"  val MRR={mrr:.4f} H@1={val_metrics.get('Hits@1',0):.4f} H@10={val_metrics.get('Hits@10',0):.4f}", flush=True)
+
+            model.train()
+            gc.collect()
+            torch.cuda.empty_cache()
 
             if mrr > best_metric:
                 best_metric = mrr
@@ -362,6 +375,10 @@ def train(args):
         gc.collect()
         torch.cuda.empty_cache()
         print(f"  ep{ep} done, loss={train_loss:.4f}", flush=True)
+
+    if ckpt_dir and not (ckpt_dir / "meta.json").exists():
+        with open(ckpt_dir / "meta.json", 'w') as f:
+            json.dump({"ep": start_ep, "global_step": global_step, "metrics": {}}, f)
 
     if args.eval:
         if evaluator is None:
@@ -407,6 +424,8 @@ if __name__ == '__main__':
     p.add_argument('--patience', type=int, default=5, help='early stop after N val MRR drops')
     p.add_argument('--eval-batch-size', type=int, default=1024, help='batch size during eval')
     p.add_argument('--max-eval-triples', type=int, default=None, help='cap val triples for speed')
+    p.add_argument('--max-test-triples', type=int, default=5000, help='cap test triples for speed')
+    p.add_argument('--eval-chunk-size', type=int, default=512, help='full-rank chunk size during eval')
     p.add_argument('--num-eval-negatives', type=int, default=50)
     args = p.parse_args()
     train(args)
