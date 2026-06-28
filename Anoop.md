@@ -8,6 +8,46 @@ Train the complete multimodal cascade model with text modality only. This is the
 - Monitor training progress and ensure completion of all 50 epochs for each seed
 - Track and report final test metrics for each seed
 
+## Setup Requirements
+
+### Installation
+```bash
+# Clone repository
+git clone <repo-url>
+cd MultiModal
+
+# Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Install CUDA-optimized PyTorch (if on GPU)
+#pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+```
+
+### Required Python Packages
+(`requirements.txt` includes):
+- `torch>=2.0.0` - Core deep learning framework
+- `torchvision>=0.15.0` - Vision utilities
+- `numpy>=1.24` - Numerical operations
+- `pandas>=2.0.0` - Data manipulation
+- `Pillow>=9.5.0` - Image processing
+- `tqdm>=4.64` - Progress bars
+- `psutil>=5.9.0` - System monitoring
+- `transformers>=4.30.0` - Transformer models
+- `wfdb>=4.1.0` - ECG data handling
+- `google-cloud-bigquery>=3.11.0` - Data extraction utilities
+- `google-auth>=2.20.0` - Authentication
+
+## System Requirements
+
+- **Python**: >=3.10
+- **GPU**: CUDA-capable with >=6GB VRAM (tested on RTX 4050 6GB)
+- **RAM**: >=16GB (for training)
+- **Disk Space**: ~500MB for code + ~5GB for multimodal features
+
 ## Execution Commands
 
 ### Seed 42
