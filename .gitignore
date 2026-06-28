@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.npy
+!simulation/data/kg/multimodal/features/*.npy
 *.npz
 *.pt
 *.pth
@@ -17,5 +18,4 @@ $null
 simulation/data/kg/*
 !simulation/data/kg/clinical_kg_efficient/
 !simulation/data/kg/clinical_kg_efficient/**
-simulation/data/kg/multimodal/
 simulation/data/kg/test_kg/
