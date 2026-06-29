@@ -237,7 +237,7 @@ ckpts/ablation/multimodal_cascade_no_pid_seed42/
 4. **Documentation**: Maintain individual progress tracking files
 
 ### Success Criteria
-1. **All seeds complete** 50 epochs successfully
+1. **All seeds complete** 51 epochs successfully
 2. **meta.json** created for each seed
 3. **test_results.json** generated for final evaluation
 4. **Complete analysis** of all three ablation types

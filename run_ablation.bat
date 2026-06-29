@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 set MASTER_LOG=ckpts\ablation\ablation_master.log
-set BASE=python simulation/kg/train_manual.py --num-negatives 4 --grad-accum-steps 2 --epochs 50 --eval --patience 10 --eval-batch-size 512 --eval-every-epochs 3 --max-eval-triples 5000
+set BASE=python simulation/kg/train_manual.py --num-negatives 4 --grad-accum-steps 2 --epochs 51 --eval --patience 10 --eval-batch-size 512 --eval-every-epochs 3 --max-eval-triples 5000
 
 if not exist ckpts\ablation mkdir ckpts\ablation
 echo === started %date% %time% === > "%MASTER_LOG%"

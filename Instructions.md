@@ -26,19 +26,19 @@ Three models available: `transE`, `complex`, `multimodal_cascade`.
 ### TransE (107M params, fastest)
 
 ```bash
-python simulation/kg/train_manual.py --model transE --batch-size 38000 --num-negatives 4 --grad-accum-steps 2 --epochs 50     --eval --patience 0 --eval-batch-size 512 --eval-every-epochs 3 --max-eval-triples 5000 --max-test-triples 5000 --eval-chunk-size 512 --keep-last-n -1 --checkpoint-dir ckpts/transe --seed 42
+python simulation/kg/train_manual.py --model transE --batch-size 38000 --num-negatives 4 --grad-accum-steps 2 --epochs 51     --eval --patience 0 --eval-batch-size 512 --eval-every-epochs 3 --max-eval-triples 5000 --max-test-triples 5000 --eval-chunk-size 512 --keep-last-n -1 --checkpoint-dir ckpts/transe --seed 42
 ```
 
 ### ComplEx (216M params)
 
 ```bash
-python simulation/kg/train_manual.py --model complex --batch-size 1024 --num-negatives 4 --grad-accum-steps 2 --epochs 50     --eval --patience 0 --eval-batch-size 512 --eval-every-epochs 3 --max-eval-triples 5000 --max-test-triples 5000 --eval-chunk-size 512 --keep-last-n -1 --checkpoint-dir ckpts/complex --seed 42
+python simulation/kg/train_manual.py --model complex --batch-size 1024 --num-negatives 4 --grad-accum-steps 2 --epochs 51     --eval --patience 0 --eval-batch-size 512 --eval-every-epochs 3 --max-eval-triples 5000 --max-test-triples 5000 --eval-chunk-size 512 --keep-last-n -1 --checkpoint-dir ckpts/complex --seed 42
 ```
 
 ### Multimodal Cascade (216M params)
 
 ```bash
-python simulation/kg/train_manual.py --model multimodal_cascade --modalities text --batch-size 512 --num-negatives 4 --grad-accum-steps 2 --epochs 50     --eval --patience 0 --eval-batch-size 512 --eval-every-epochs 3 --max-eval-triples 5000 --max-test-triples 5000 --eval-chunk-size 512 --keep-last-n -1 --checkpoint-dir ckpts/cascade --seed 42
+python simulation/kg/train_manual.py --model multimodal_cascade --modalities text --batch-size 512 --num-negatives 4 --grad-accum-steps 2 --epochs 51     --eval --patience 0 --eval-batch-size 512 --eval-every-epochs 3 --max-eval-triples 5000 --max-test-triples 5000 --eval-chunk-size 512 --keep-last-n -1 --checkpoint-dir ckpts/cascade --seed 42
 ```
 
 Cascade also supports `--ablation` (no_pid, no_type, no_modality) for ablation studies.

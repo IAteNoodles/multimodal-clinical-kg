@@ -5,7 +5,7 @@ Train the complete multimodal cascade model with text modality only. This is the
 
 ## Responsibilities
 - Execute full cascade model training across 3 different random seeds
-- Monitor training progress and ensure completion of all 50 epochs for each seed
+- Monitor training progress and ensure completion of all 51 epochs for each seed
 - Track and report final test metrics for each seed
 
 ## Setup Requirements
@@ -109,7 +109,7 @@ python simulation/kg/train_manual.py \
 
 ## Expected Duration
 
-**Per seed**: ~40 minutes per epoch × 50 epochs = ~35 hours  
+**Per seed**: ~40 minutes per epoch × 51 epochs = ~35 hours  
 **Total (3 seeds)**: ~105 hours (parallel execution recommended)
 
 ## Monitoring & Tracking
@@ -583,7 +583,7 @@ def analyze_impact(full_path, nopid_path, notype_path):
 4. **Documentation**: Maintain individual progress tracking files
 
 ### Success Criteria
-1. **All seeds complete** 50 epochs successfully
+1. **All seeds complete** 51 epochs successfully
 2. **meta.json** created for each seed
 3. **test_results.json** generated for final evaluation
 4. **Complete analysis** of all three ablation types
