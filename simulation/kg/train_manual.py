@@ -421,7 +421,7 @@ if __name__ == '__main__':
     p.add_argument('--eval', action='store_true', help='run val eval after each epoch')
     p.add_argument('--eval-only', action='store_true', help='load best model and run test eval only')
     p.add_argument('--eval-every-epochs', type=int, default=1)
-    p.add_argument('--patience', type=int, default=5, help='early stop after N val MRR drops')
+    p.add_argument('--patience', type=int, default=0, help='early stop after N val MRR drops (0=disabled)')
     p.add_argument('--eval-batch-size', type=int, default=1024, help='batch size during eval')
     p.add_argument('--max-eval-triples', type=int, default=None, help='cap val triples for speed')
     p.add_argument('--max-test-triples', type=int, default=5000, help='cap test triples for speed')
