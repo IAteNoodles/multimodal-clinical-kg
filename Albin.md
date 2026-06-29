@@ -62,6 +62,7 @@ python simulation/kg/train_manual.py \
     --eval-every-epochs 3 \
     --max-eval-triples 5000 \
     --eval-chunk-size 512 \
+    --patience 0 \
     --keep-last-n -1
 ```
 
@@ -77,6 +78,7 @@ python simulation/kg/train_manual.py \
     --eval-every-epochs 3 \
     --max-eval-triples 5000 \
     --eval-chunk-size 512 \
+    --patience 0 \
     --keep-last-n -1
 ```
 
@@ -92,6 +94,7 @@ python simulation/kg/train_manual.py \
     --eval-every-epochs 3 \
     --max-eval-triples 5000 \
     --eval-chunk-size 512 \
+    --patience 0 \
     --keep-last-n -1
 ```
 
