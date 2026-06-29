@@ -119,6 +119,39 @@ Hits@1: ~0.04-0.08 (vs ~0.07-0.12 for full model)
 Hits@10: ~0.14-0.20 (vs ~0.18-0.25 for full model)
 ```
 
+## How to Read Training Logs
+
+Look at the live log with `Get-Content -Wait ckpts\ablation\multimodal_cascade_no_pid_seed{seed}.log` and the stderr file for tqdm progress.
+
+### Signs Training Is Fine ✅
+- **Loss number goes down over epochs**: e.g., ep1 loss=2.1, ep5 loss=1.5, ep10 loss=0.8
+- **MRR goes up**: starts near 0, increases to 0.10+ over time
+- **tqdm progress bar moves steadily**: ~6-7 it/s for cascade, batch 512
+- **Loss changes between batches** (not identical every time)
+
+### Signs Something Is Wrong ❌
+- **Loss stuck at 2.197** (or same number for many epochs) → model learned nothing, guessing randomly
+- **MRR stays at 0.000** across all evals → all scores identical, random ranking
+- **Loss drops but MRR stays 0** → model memorized training data, can't predict new triples
+- **Loss is exactly the same every batch** → embeddings not updating (gradients zero or collapsed)
+- **"ios_base::badbit" or "unexpected pos" errors** → disk full from too many checkpoint files
+- **Training gets slower over time** → GPU memory leak, restart needed
+- **tqdm stuck at same batch for >30s** → process hung, kill and resume
+- **Log file not updating** → Python buffering, use `python -u` flag
+
+### What to Do When Something Is Wrong
+1. Stop the process: `Get-Process -Name python | Stop-Process -Force`
+2. Check how much disk is free: `Get-PSDrive C`
+3. Delete old checkpoint files if disk is full
+4. Restart with `--resume` to continue from last good checkpoint
+5. If problem persists, ask Noodles
+
+### Checkpoint Files on Disk
+- `latest.pt` (2.6 GB) — saved every epoch, needed for resume
+- `best_model.pt` (0.86 GB) — saved only when MRR improves, just model weights
+- NO `ep_*.pt` files — `--keep-last-n -1` prevents them from being created
+- If `ep_*.pt` files appear, disk will fill up fast — delete them
+
 ## Execution Timeline
 
 **Start all no_pid seeds immediately after full model seeds begin:**
