@@ -1,5 +1,5 @@
 """Ablation runner. Run: python run_ablation.py"""
-import subprocess, sys, time
+import subprocess, sys, time, json
 from pathlib import Path
 
 BASE = [
@@ -13,9 +13,11 @@ BASE = [
     "--keep-last-n", "-1",
 ]
 
+TARGET_EPOCHS = int(BASE[BASE.index("--epochs") + 1])
+
 MODELS = [
     ("transE", 38000, False, {"--lr": "3e-4", "--weight-decay": "1e-3", "--n3-weight": "0.0"}),
-    ("complex", 18000, False, {"--lr": "1e-3", "--weight-decay": "0", "--n3-weight": "0.0"}),
+    ("complex", 1024, False, {"--lr": "1e-3", "--weight-decay": "0", "--n3-weight": "0.0"}),
     ("multimodal_cascade", 512, True, {"--lr": "3e-4", "--weight-decay": "1e-5", "--n3-weight": "0.01"}),
 ]
 
@@ -43,9 +45,15 @@ for model, bs, has_ablations, overrides in MODELS:
                 ckpt = CKPT_ROOT / name
                 logfile = CKPT_ROOT / f"{name}.log"
 
-                if (ckpt / "meta.json").exists():
-                    log(f"SKIP {name} (already done)")
-                    continue
+                meta_path = ckpt / "meta.json"
+                if meta_path.exists():
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                    ep_done = meta.get("ep", 0)
+                    if ep_done >= TARGET_EPOCHS:
+                        log(f"SKIP {name} (ep={ep_done} >= {TARGET_EPOCHS})")
+                        continue
+                    log(f"RESUME {name} (ep={ep_done}/{TARGET_EPOCHS})")
 
                 cmd = BASE + [
                     "--model", model, "--batch-size", str(bs),
@@ -56,9 +64,10 @@ for model, bs, has_ablations, overrides in MODELS:
                 if ablation != "full":
                     cmd += ["--ablation", ablation]
 
-                if ckpt.exists():
+                if ckpt.exists() and meta_path.exists():
                     cmd.append("--resume")
-                    log(f"RESUME {name}")
+                elif ckpt.exists():
+                    log(f"WARN {name}: dir exists but no meta.json, starting fresh")
                 else:
                     log(f"START {name}")
 
@@ -75,9 +84,15 @@ for model, bs, has_ablations, overrides in MODELS:
             ckpt = CKPT_ROOT / name
             logfile = CKPT_ROOT / f"{name}.log"
 
-            if (ckpt / "meta.json").exists():
-                log(f"SKIP {name} (already done)")
-                continue
+            meta_path = ckpt / "meta.json"
+            if meta_path.exists():
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                ep_done = meta.get("ep", 0)
+                if ep_done >= TARGET_EPOCHS:
+                    log(f"SKIP {name} (ep={ep_done} >= {TARGET_EPOCHS})")
+                    continue
+                log(f"RESUME {name} (ep={ep_done}/{TARGET_EPOCHS})")
 
             cmd = BASE + [
                 "--model", model, "--batch-size", str(bs),
@@ -86,9 +101,10 @@ for model, bs, has_ablations, overrides in MODELS:
             for k, v in overrides.items():
                 cmd += [k, v]
 
-            if ckpt.exists():
+            if ckpt.exists() and meta_path.exists():
                 cmd.append("--resume")
-                log(f"RESUME {name}")
+            elif ckpt.exists():
+                log(f"WARN {name}: dir exists but no meta.json, starting fresh")
             else:
                 log(f"START {name}")
 

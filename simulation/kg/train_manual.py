@@ -339,7 +339,7 @@ def train(args):
                 patience_counter = 0
                 if ckpt_dir:
                     ckpt_dir.mkdir(parents=True, exist_ok=True)
-                    save_checkpoint(ckpt_dir / "best.pt", model, opt, sched, scaler, global_step, ep, ep_metrics)
+                    torch.save(model.state_dict(), ckpt_dir / "best_model.pt")
                     print(f"  new best: {best_metric:.4f}")
             else:
                 patience_counter += 1
@@ -363,7 +363,7 @@ def train(args):
             ep_metrics['patience_counter'] = patience_counter
             save_checkpoint(ckpt_dir / "latest.pt", model, opt, sched, scaler, global_step, ep, ep_metrics)
 
-            if args.keep_last_n != 0:
+            if args.keep_last_n >= 0:
                 ep_path = ckpt_dir / f"ep_{ep}.pt"
                 save_checkpoint(ep_path, model, opt, sched, scaler, global_step, ep, ep_metrics)
                 if args.keep_last_n > 0:
