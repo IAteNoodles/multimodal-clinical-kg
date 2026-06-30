@@ -828,9 +828,10 @@ class MultimodalCASCADEModel(nn.Module):
                 val_tensor = torch.stack(values)
                 self._feature_tensor.index_copy_(0, idx_tensor, val_tensor)
                 self._feature_mask[idx_tensor] = True
-            dev = self.entity_embeddings.weight.device
-            self._feature_tensor = self._feature_tensor.to(dev)
-            self._feature_mask = self._feature_mask.to(dev)
+            self._feature_tensor_cpu = self._feature_tensor.cpu()
+            self._feature_mask_cpu = self._feature_mask.cpu()
+            self._feature_tensor = None
+            self._feature_mask = None
 
     def _get_entity_emb(
         self,
@@ -882,7 +883,7 @@ class MultimodalCASCADEModel(nn.Module):
         head_idx = head_ids[cross_mask]
         tail_idx = tail_ids[cross_mask]
 
-        if not hasattr(self, "_feature_tensor") or self._feature_tensor is None:
+        if not hasattr(self, "_feature_tensor_cpu") or self._feature_tensor_cpu is None:
             if getattr(self, "precompute_features", False):
                 raise ValueError(
                     "_compute_cross_modal_context requires precomputed features "
@@ -891,9 +892,13 @@ class MultimodalCASCADEModel(nn.Module):
                 )
             return ctx
 
-        max_id = self._feature_tensor.size(0)
-        h_valid = (head_idx < max_id) & self._feature_mask[head_idx]
-        t_valid = (tail_idx < max_id) & self._feature_mask[tail_idx]
+        max_id = self._feature_tensor_cpu.size(0)
+        dev = head_ids.device
+        head_idx_cpu = head_idx.cpu()
+        tail_idx_cpu = tail_idx.cpu()
+        max_valid = max_id - 1
+        h_valid = (head_idx_cpu <= max_valid) & self._feature_mask_cpu[head_idx_cpu.clamp(0, max_valid)]
+        t_valid = (tail_idx_cpu <= max_valid) & self._feature_mask_cpu[tail_idx_cpu.clamp(0, max_valid)]
         both_valid = h_valid & t_valid
 
         if not both_valid.any():
@@ -902,8 +907,8 @@ class MultimodalCASCADEModel(nn.Module):
         valid_head = head_idx[both_valid]
         valid_tail = tail_idx[both_valid]
 
-        h_feats = self._feature_tensor[valid_head]
-        t_feats = self._feature_tensor[valid_tail]
+        h_feats = self._feature_tensor_cpu[valid_head.cpu()].to(dev)
+        t_feats = self._feature_tensor_cpu[valid_tail.cpu()].to(dev)
         h_feats = F.normalize(h_feats, p=2, dim=-1)
         t_feats = F.normalize(t_feats, p=2, dim=-1)
 
