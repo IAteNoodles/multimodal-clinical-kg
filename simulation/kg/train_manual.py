@@ -401,7 +401,8 @@ if __name__ == '__main__':
     p.add_argument('--modalities', default='text')
     p.add_argument('--batch-size', type=int, default=256)
     p.add_argument('--num-negatives', type=int, default=4)
-    p.add_argument('--grad-accum-steps', type=int, default=2)
+    p.add_argument('--grad-accum-steps', type=int, default=1,
+                   help='gradient accumulation steps. Use 1 on low-VRAM GPUs (6GB) to avoid OOM from .grad fragmentation')
     p.add_argument('--lr', type=float, default=3e-4)
     p.add_argument('--weight-decay', type=float, default=1e-3)
     p.add_argument('--warmup-steps', type=int, default=1000)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 BASE = [
     sys.executable, "simulation/kg/train_manual.py",
-    "--num-negatives", "4", "--grad-accum-steps", "2",
+    "--num-negatives", "4", "--grad-accum-steps", "1",
     "--epochs", "51", "--eval", "--patience", "0",
     "--eval-batch-size", "512", "--eval-every-epochs", "3",
     "--max-eval-triples", "5000",
@@ -18,7 +18,7 @@ TARGET_EPOCHS = int(BASE[BASE.index("--epochs") + 1])
 MODELS = [
     ("transE", 38000, False, {"--lr": "3e-4", "--weight-decay": "1e-3", "--n3-weight": "0.0"}),
     ("complex", 1024, False, {"--lr": "1e-3", "--weight-decay": "0", "--n3-weight": "0.0"}),
-    ("multimodal_cascade", 512, True, {"--lr": "3e-4", "--weight-decay": "1e-5", "--n3-weight": "0.01"}),
+    ("multimodal_cascade", 256, True, {"--lr": "1e-3", "--weight-decay": "0", "--n3-weight": "0.0"}),
 ]
 
 ABLATIONS = ["full", "no_pid", "no_type", "no_modality"]
