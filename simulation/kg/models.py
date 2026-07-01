@@ -907,8 +907,12 @@ class MultimodalCASCADEModel(nn.Module):
         valid_head = head_idx[both_valid]
         valid_tail = tail_idx[both_valid]
 
-        h_feats = self._feature_tensor_cpu[valid_head.cpu()].to(dev)
-        t_feats = self._feature_tensor_cpu[valid_tail.cpu()].to(dev)
+        if not hasattr(self, "_feature_tensor_gpu") or self._feature_tensor_gpu is None:
+            self._feature_tensor_gpu = self._feature_tensor_cpu.to(dev)
+            self._feature_mask_gpu = self._feature_mask_cpu.to(dev)
+
+        h_feats = self._feature_tensor_gpu[valid_head]
+        t_feats = self._feature_tensor_gpu[valid_tail]
         h_feats = F.normalize(h_feats, p=2, dim=-1)
         t_feats = F.normalize(t_feats, p=2, dim=-1)
 
