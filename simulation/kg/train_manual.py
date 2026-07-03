@@ -234,9 +234,11 @@ def train(args):
                     json.dump({"ep": 0, "global_step": 0, "metrics": test_metrics}, f)
         return
 
-    if start_ep >= args.epochs and not args.eval_only:
-        print("  training already complete")
-        return
+    if start_ep >= args.epochs:
+        if not args.eval:
+            print("  training already complete")
+            return
+        print("  training already complete, running final eval")
 
     from tqdm import tqdm
     done = False
@@ -307,6 +309,22 @@ def train(args):
         train_loss = ep_loss_sum / ep_loss_count if ep_loss_count > 0 else 0.0
         ep_metrics = {"train_loss": train_loss}
 
+        if ckpt_dir:
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            ep_metrics['best_metric'] = best_metric
+            ep_metrics['best_ep'] = best_ep
+            ep_metrics['patience_counter'] = patience_counter
+            save_checkpoint(ckpt_dir / "latest.pt", model, opt, sched, scaler, global_step, ep, ep_metrics)
+
+            if args.keep_last_n >= 0:
+                ep_path = ckpt_dir / f"ep_{ep}.pt"
+                save_checkpoint(ep_path, model, opt, sched, scaler, global_step, ep, ep_metrics)
+                if args.keep_last_n > 0:
+                    old_eps = sorted(ckpt_dir.glob("ep_*.pt"), key=lambda p: int(p.stem.split('_')[1]))
+                    while len(old_eps) > args.keep_last_n:
+                        old_eps[0].unlink()
+                        old_eps.pop(0)
+
         if args.eval and ep % args.eval_every_epochs == 0:
             if evaluator is None:
                 evaluator = LinkPredictionEvaluator(dataset, device=device)
@@ -354,23 +372,8 @@ def train(args):
             if done:
                 break
         else:
-            ep_metrics["MRR"] = best_metric
-
-        if ckpt_dir:
-            ckpt_dir.mkdir(parents=True, exist_ok=True)
-            ep_metrics['best_metric'] = best_metric
-            ep_metrics['best_ep'] = best_ep
-            ep_metrics['patience_counter'] = patience_counter
-            save_checkpoint(ckpt_dir / "latest.pt", model, opt, sched, scaler, global_step, ep, ep_metrics)
-
-            if args.keep_last_n >= 0:
-                ep_path = ckpt_dir / f"ep_{ep}.pt"
-                save_checkpoint(ep_path, model, opt, sched, scaler, global_step, ep, ep_metrics)
-                if args.keep_last_n > 0:
-                    old_eps = sorted(ckpt_dir.glob("ep_*.pt"), key=lambda p: int(p.stem.split('_')[1]))
-                    while len(old_eps) > args.keep_last_n:
-                        old_eps[0].unlink()
-                        old_eps.pop(0)
+            if 'MRR' not in ep_metrics:
+                ep_metrics['MRR'] = best_metric
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -384,6 +387,10 @@ def train(args):
         if evaluator is None:
             evaluator = LinkPredictionEvaluator(dataset, device=device)
         print(f"\n  best val MRR={best_metric:.4f} at ep{best_ep}")
+        model.zero_grad(set_to_none=True)
+        del opt
+        gc.collect()
+        torch.cuda.empty_cache()
         if ckpt_dir and load_best_weights(model, ckpt_dir, device):
             test_metrics = run_test_eval(model, evaluator, dataset, args, device, entity_type_ids, entity_modality_ids)
             with open(ckpt_dir / "test_results.json", 'w') as f:
