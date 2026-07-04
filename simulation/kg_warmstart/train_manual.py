@@ -352,6 +352,7 @@ def train(args):
             if evaluator is None:
                 evaluator = LinkPredictionEvaluator(dataset, device=device)
             model.zero_grad(set_to_none=True)
+            del opt
             gc.collect()
             torch.cuda.empty_cache()
             val_t, val_w = dataset.get_val_triples()
@@ -392,6 +393,10 @@ def train(args):
             evaluator = None
             gc.collect()
             torch.cuda.empty_cache()
+            if not done:
+                opt = AdamW([
+                    {'params': [p for p in model.parameters() if p.requires_grad], 'lr': args.lr},
+                ], lr=args.lr, weight_decay=args.weight_decay)
             if done:
                 break
         else:
@@ -400,7 +405,9 @@ def train(args):
 
         gc.collect()
         torch.cuda.empty_cache()
-        print(f"  ep{ep} done, loss={train_loss:.4f}", flush=True)
+        gate_val = model.cascade_gate.item() if hasattr(model, 'cascade_gate') else None
+        gate_str = f" gate={gate_val:.4f}" if gate_val is not None else ""
+        print(f"  ep{ep} done, loss={train_loss:.4f}{gate_str}", flush=True)
 
     if ckpt_dir and not (ckpt_dir / "meta.json").exists():
         with open(ckpt_dir / "meta.json", 'w') as f:
