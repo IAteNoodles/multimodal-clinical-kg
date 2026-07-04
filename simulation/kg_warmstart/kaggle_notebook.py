@@ -25,41 +25,42 @@ import numpy as np
 KAGGLE = "KAGGLE_URL_BASE" in os.environ
 
 if KAGGLE:
-    DATA_DIR = Path("/kaggle/input/multimodal-clinical-kg-data")
+    IN_DIR = Path("/kaggle/input/multimodal-clinical-kg-data")
     WORK_DIR = Path("/kaggle/working")
     if not (WORK_DIR / "multimodal-clinical-kg").exists():
         os.system("git clone -b feat/warmstart-cascade --depth 1 https://github.com/IAteNoodles/multimodal-clinical-kg.git " + str(WORK_DIR / "multimodal-clinical-kg"))
     CODE_DIR = WORK_DIR / "multimodal-clinical-kg"
     os.chdir(str(CODE_DIR))
     sys.path.insert(0, str(CODE_DIR))
+    # Discover data: try direct subdirs, flat files, or extract archives
+    print("  input files:", flush=True)
+    for p in sorted(IN_DIR.iterdir()):
+        tag = "dir" if p.is_dir() else f"sz={p.stat().st_size}"
+        print(f"    {p.name}  ({tag})", flush=True)
+    if (IN_DIR / "clinical_kg_efficient").is_dir():
+        DATA_DIR = IN_DIR
+        print(f"  using direct subdirs: {DATA_DIR}", flush=True)
+    elif (IN_DIR / "metadata.json").is_file():
+        DATA_DIR = IN_DIR
+        print(f"  using flat files at root: {DATA_DIR}", flush=True)
+    else:
+        print("  extracting archives ...", flush=True)
+        for f in sorted(IN_DIR.iterdir()):
+            name = f.name.lower()
+            if name.endswith(".zip"):
+                with zipfile.ZipFile(f) as z:
+                    z.extractall(WORK_DIR)
+                print(f"    extracted {f.name}", flush=True)
+            elif name.endswith(".tar") or name.endswith(".tar.gz"):
+                with tarfile.open(f) as t:
+                    t.extractall(WORK_DIR)
+                print(f"    extracted {f.name}", flush=True)
+        DATA_DIR = WORK_DIR
+        print(f"  extracted to: {DATA_DIR}", flush=True)
 else:
     DATA_DIR = Path("simulation/data/kg")
     WORK_DIR = Path(".")
     CODE_DIR = Path(".")
-
-# Extract dataset if archived (Kaggle input doesn't auto-extract zip/tar)
-if KAGGLE:
-    _raw = Path("/kaggle/input/multimodal-clinical-kg-data")
-    _need_extract = not (_raw / "clinical_kg_efficient").is_dir()
-    if _need_extract:
-        print("  extracting dataset archives ...", flush=True)
-        for subdir in ["clinical_kg_efficient", "multimodal"]:
-            for ext in [".zip", ".tar"]:
-                a = _raw / f"{subdir}{ext}"
-                if a.exists():
-                    d = WORK_DIR / subdir
-                    os.makedirs(d, exist_ok=True)
-                    if ext == ".zip":
-                        with zipfile.ZipFile(a) as z:
-                            z.extractall(WORK_DIR)
-                    else:
-                        with tarfile.open(a) as t:
-                            t.extractall(WORK_DIR)
-                    print(f"    {a.name} -> {d}", flush=True)
-                    break
-        DATA_DIR = WORK_DIR
-    else:
-        DATA_DIR = _raw
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"device={device}", flush=True)
@@ -101,8 +102,10 @@ class InfoNCELoss(torch.nn.Module):
         super().__init__()
         self.t = temperature
     def forward(self, pos, neg):
+        B = pos.size(0)
+        neg = neg.view(B, -1)
         logits = torch.cat([pos.unsqueeze(-1), neg], dim=-1) / self.t
-        target = torch.zeros(logits.size(0), dtype=torch.long, device=logits.device)
+        target = torch.zeros(B, dtype=torch.long, device=pos.device)
         return torch.nn.functional.cross_entropy(logits, target)
 
 def build_complex_model(dataset):
@@ -113,7 +116,7 @@ def build_cascade_model(dataset):
     from simulation.kg_warmstart.models import MultimodalCASCADEModel
     from simulation.kg.dataset import ENTITY_TYPE_TO_ID, MODALITY_TO_ID, CROSS_MODAL_RELATIONS
     cross_rel_ids = {dataset.relation2id[r] for r in CROSS_MODAL_RELATIONS if r in dataset.relation2id}
-    return MultimodalCASCADEModel(
+    model = MultimodalCASCADEModel(
         dataset.num_entities, dataset.num_relations, EMBED_DIM,
         num_entity_types=len(ENTITY_TYPE_TO_ID),
         num_modalities=len(MODALITY_TO_ID), synergy_dim=64, num_heads=4,
@@ -121,6 +124,8 @@ def build_cascade_model(dataset):
         use_pretrained_encoders=False, modalities={"text", "image", "ecg", "structured"},
         ablation=None, cross_modal_relations=cross_rel_ids,
     )
+    model.precompute_features = False
+    return model
 
 def get_loaders(dataset, seed, batch_size):
     torch.manual_seed(seed)
@@ -160,10 +165,10 @@ def train_complex(dataset, seed, epochs=EPOCHS):
         loss_sum = 0.0
         for bi, (batch,) in enumerate(loader):
             batch = batch.to(device, non_blocking=True)
-            neg_h, neg_r, neg_t = neg_sampler.sample(batch)
+            neg_all, _ = neg_sampler.sample(batch)
             with torch.amp.autocast("cuda", enabled=scaler is not None):
                 pos = model.score(batch[:, 0], batch[:, 1], batch[:, 2])
-                neg = model.score(neg_h, neg_r, neg_t)
+                neg = model.score(neg_all[:, 0], neg_all[:, 1], neg_all[:, 2])
                 loss = loss_fn(pos, neg)
             if scaler:
                 scaler.scale(loss).backward()
@@ -240,10 +245,10 @@ def train_cascade_warmstart(dataset, seed, epochs=EPOCHS):
         loss_sum = 0.0
         for bi, (batch,) in enumerate(loader):
             batch = batch.to(device, non_blocking=True)
-            neg_h, neg_r, neg_t = neg_sampler.sample(batch)
+            neg_all, _ = neg_sampler.sample(batch)
             with torch.amp.autocast("cuda", enabled=scaler is not None):
                 pos = model.score(batch[:, 0], batch[:, 1], batch[:, 2], entity_type_ids, entity_modality_ids)
-                neg = model.score(neg_h, neg_r, neg_t, entity_type_ids, entity_modality_ids)
+                neg = model.score(neg_all[:, 0], neg_all[:, 1], neg_all[:, 2], entity_type_ids, entity_modality_ids)
                 loss = loss_fn(pos, neg)
             if scaler:
                 scaler.scale(loss).backward()
@@ -283,7 +288,23 @@ def train_cascade_warmstart(dataset, seed, epochs=EPOCHS):
 # ## Step 1: Train ComplEx (seed 42, shared embeddings)
 
 # %%
-dataset = KGTriplesDataset.from_efficient(DATA_DIR / "clinical_kg_efficient", seed=42)
+# Find where metadata.json lives
+kg_dir = DATA_DIR / "clinical_kg_efficient"
+if not kg_dir.is_dir():
+    for cand in [DATA_DIR, DATA_DIR / "kg", DATA_DIR / "data"]:
+        if (cand / "metadata.json").is_file():
+            kg_dir = cand
+            break
+    if not (kg_dir / "metadata.json").is_file():
+        for sub in DATA_DIR.iterdir():
+            if sub.is_dir() and (sub / "metadata.json").is_file():
+                kg_dir = sub
+                break
+    if not (kg_dir / "metadata.json").is_file():
+        raise FileNotFoundError(f"metadata.json not found under {DATA_DIR}")
+print(f"  kg_dir = {kg_dir}", flush=True)
+
+dataset = KGTriplesDataset.from_efficient(kg_dir, seed=42)
 print(f"entities={dataset.num_entities} relations={dataset.num_relations}", flush=True)
 
 complex_metrics = train_complex(dataset, seed=42)
