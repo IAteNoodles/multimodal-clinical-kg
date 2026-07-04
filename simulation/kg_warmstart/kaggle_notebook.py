@@ -136,8 +136,8 @@ def get_loaders(dataset, seed, batch_size):
     )
     return loader
 
-def train_complex(dataset, seed, epochs=EPOCHS):
-    print(f"\n{'='*60}\nComplEx seed {seed}\n{'='*60}", flush=True)
+def train_complex(dataset, seed, epochs=EPOCHS, start_ep=0):
+    print(f"\n{'='*60}\nComplEx seed {seed} (resume from ep{start_ep})\n{'='*60}", flush=True)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
@@ -153,14 +153,27 @@ def train_complex(dataset, seed, epochs=EPOCHS):
     scaler = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
 
     n_steps_total = epochs * len(loader)
+    global_step = start_ep * len(loader)
+    warmup = 200
     def lr_lambda(s):
-        if s < 1000:
-            return s / 1000
-        p = (s - 1000) / max(1, n_steps_total - 1000)
+        if s < warmup:
+            return s / warmup
+        p = (s - warmup) / max(1, n_steps_total - warmup)
         return 0.5 * (1.0 + math.cos(math.pi * p))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
-    for ep in range(1, epochs + 1):
+    complex_ckpt = CKPT_DIR / "complex_latest.pt"
+    if start_ep > 0 and complex_ckpt.exists():
+        sd = torch.load(complex_ckpt, map_location="cpu", weights_only=False)
+        model.load_state_dict(sd["model"])
+        opt.load_state_dict(sd["opt"])
+        sched.load_state_dict(sd["sched"])
+        if scaler and "scaler" in sd and sd["scaler"]:
+            scaler.load_state_dict(sd["scaler"])
+        global_step = sd.get("global_step", start_ep * len(loader))
+        print(f"  loaded checkpoint ep{start_ep}", flush=True)
+
+    for ep in range(start_ep + 1, epochs + 1):
         model.train()
         loss_sum = 0.0
         for bi, (batch,) in enumerate(loader):
@@ -180,10 +193,18 @@ def train_complex(dataset, seed, epochs=EPOCHS):
             sched.step()
             opt.zero_grad(set_to_none=True)
             loss_sum += loss.item()
-        print(f"  ep{ep}/{epochs} loss={loss_sum/len(loader):.4f}", flush=True)
+            global_step += 1
+        avg_loss = loss_sum / len(loader)
+        print(f"  ep{ep}/{epochs} loss={avg_loss:.4f}", flush=True)
+        torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
+                     "scaler": scaler.state_dict() if scaler else None, "ep": ep,
+                     "global_step": global_step}, complex_ckpt)
 
-    torch.save(model.entity_embeddings.weight.data.cpu(), CKPT_DIR / "complex_entity_embeddings.pt")
-    print(f"  saved entity_embeddings", flush=True)
+    # Save entity embeddings for warm-start
+    ew_path = CKPT_DIR / "complex_entity_embeddings.pt"
+    if not ew_path.exists():
+        torch.save(model.entity_embeddings.weight.data.cpu(), ew_path)
+        print(f"  saved entity_embeddings", flush=True)
 
     # Evaluate ComplEx
     model.eval()
@@ -195,6 +216,10 @@ def train_complex(dataset, seed, epochs=EPOCHS):
         num_eval_negatives=500, full_rank=False,
     )
     print(f"  ComplEx test MRR={test_metrics.get('MRR',0):.4f}", flush=True)
+    # Save metrics in checkpoint
+    sd = torch.load(complex_ckpt, map_location="cpu", weights_only=False)
+    sd["metrics"] = test_metrics
+    torch.save(sd, complex_ckpt)
     return test_metrics
 
 def train_cascade_warmstart(dataset, seed, epochs=EPOCHS):
@@ -230,10 +255,11 @@ def train_cascade_warmstart(dataset, seed, epochs=EPOCHS):
     scaler = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
 
     n_steps_total = epochs * len(loader)
+    warmup = 200
     def lr_lambda(s):
-        if s < 1000:
-            return s / 1000
-        p = (s - 1000) / max(1, n_steps_total - 1000)
+        if s < warmup:
+            return s / warmup
+        p = (s - warmup) / max(1, n_steps_total - warmup)
         return 0.5 * (1.0 + math.cos(math.pi * p))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
@@ -307,8 +333,19 @@ print(f"  kg_dir = {kg_dir}", flush=True)
 dataset = KGTriplesDataset.from_efficient(kg_dir, seed=42)
 print(f"entities={dataset.num_entities} relations={dataset.num_relations}", flush=True)
 
-complex_metrics = train_complex(dataset, seed=42)
-print(f"ComplEx results: {json.dumps(complex_metrics)}", flush=True)
+# Resume ComplEx if checkpoint exists
+complex_ckpt = CKPT_DIR / "complex_latest.pt"
+complex_start_ep = 0
+if complex_ckpt.exists():
+    sd = torch.load(complex_ckpt, map_location="cpu", weights_only=False)
+    complex_start_ep = sd.get("ep", 0)
+    print(f"  ComplEx checkpoint found, resuming from ep{complex_start_ep}", flush=True)
+if complex_start_ep >= 51:
+    print("  ComplEx already complete, skipping", flush=True)
+    complex_metrics = sd.get("metrics", {})
+else:
+    complex_metrics = train_complex(dataset, seed=42, start_ep=complex_start_ep)
+    print(f"ComplEx results: {json.dumps(complex_metrics)}", flush=True)
 
 # %% [markdown]
 # ## Step 2: Train Warm-Start Cascade (3 seeds)
