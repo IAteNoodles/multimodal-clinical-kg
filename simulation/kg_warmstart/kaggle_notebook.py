@@ -37,22 +37,29 @@ else:
     WORK_DIR = Path(".")
     CODE_DIR = Path(".")
 
-# Extract dataset if archived
+# Extract dataset if archived (Kaggle input doesn't auto-extract zip/tar)
 if KAGGLE:
-    for subdir in ["clinical_kg_efficient", "multimodal"]:
-        target = DATA_DIR / subdir
-        if not target.is_dir():
+    _raw = Path("/kaggle/input/multimodal-clinical-kg-data")
+    _need_extract = not (_raw / "clinical_kg_efficient").is_dir()
+    if _need_extract:
+        print("  extracting dataset archives ...", flush=True)
+        for subdir in ["clinical_kg_efficient", "multimodal"]:
             for ext in [".zip", ".tar"]:
-                archive = DATA_DIR / f"{subdir}{ext}"
-                if archive.exists():
-                    print(f"  extracting {archive.name} ...", flush=True)
+                a = _raw / f"{subdir}{ext}"
+                if a.exists():
+                    d = WORK_DIR / subdir
+                    os.makedirs(d, exist_ok=True)
                     if ext == ".zip":
-                        with zipfile.ZipFile(archive, "r") as z:
-                            z.extractall(DATA_DIR)
+                        with zipfile.ZipFile(a) as z:
+                            z.extractall(WORK_DIR)
                     else:
-                        with tarfile.open(archive, "r") as t:
-                            t.extractall(DATA_DIR)
+                        with tarfile.open(a) as t:
+                            t.extractall(WORK_DIR)
+                    print(f"    {a.name} -> {d}", flush=True)
                     break
+        DATA_DIR = WORK_DIR
+    else:
+        DATA_DIR = _raw
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"device={device}", flush=True)
