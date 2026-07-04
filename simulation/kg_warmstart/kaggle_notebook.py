@@ -15,7 +15,7 @@
 # ## Setup
 
 # %%
-import os, sys, json, math, gc, shutil, copy
+import os, sys, json, math, gc, shutil, copy, zipfile, tarfile
 from pathlib import Path
 from datetime import datetime
 
@@ -36,6 +36,23 @@ else:
     DATA_DIR = Path("simulation/data/kg")
     WORK_DIR = Path(".")
     CODE_DIR = Path(".")
+
+# Extract dataset if archived
+if KAGGLE:
+    for subdir in ["clinical_kg_efficient", "multimodal"]:
+        target = DATA_DIR / subdir
+        if not target.is_dir():
+            for ext in [".zip", ".tar"]:
+                archive = DATA_DIR / f"{subdir}{ext}"
+                if archive.exists():
+                    print(f"  extracting {archive.name} ...", flush=True)
+                    if ext == ".zip":
+                        with zipfile.ZipFile(archive, "r") as z:
+                            z.extractall(DATA_DIR)
+                    else:
+                        with tarfile.open(archive, "r") as t:
+                            t.extractall(DATA_DIR)
+                    break
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"device={device}", flush=True)
