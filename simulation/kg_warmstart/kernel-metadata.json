@@ -1,0 +1,13 @@
+{
+  "id": "abhijitkumarsingh007/warmstart-cascade-kg",
+  "title": "warmstart-cascade-kg",
+  "code_file": "kaggle_warmstart_cascade.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": ["abhijitkumarsingh007/multimodal-clinical-kg-data"],
+  "competition_sources": [],
+  "kernel_sources": []
+}
