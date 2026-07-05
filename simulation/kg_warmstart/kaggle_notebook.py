@@ -6,16 +6,17 @@
 # Code: https://github.com/IAteNoodles/multimodal-clinical-kg/tree/feat/warmstart-cascade
 #
 # Strategy:
-#   1. Train ComplEx (51 epochs, seed 42) → saves entity_embeddings.pt
-#   2. Build cascade model, freeze entity_embeddings from ComplEx, train heads only
-#   3. Run 3 seeds of warm-started cascade
-#   4. Evaluate on test set
+#   1. Train ComplEx (early stopping, seed 42) → saves entity_embeddings.pt
+#   2. Upload entity_embeddings as Kaggle dataset for reproducibility
+#   3. Build cascade model, freeze entity_embeddings from ComplEx, train heads only
+#   4. Run 3 seeds of warm-started cascade
+#   5. Evaluate on test set
 
 # %% [markdown]
 # ## Setup
 
 # %%
-import os, sys, json, math, gc, shutil, copy, zipfile, tarfile
+import os, sys, json, math, gc, shutil, copy, zipfile, tarfile, subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -25,14 +26,13 @@ import numpy as np
 KAGGLE = "KAGGLE_URL_BASE" in os.environ
 
 if KAGGLE:
-    IN_DIR = Path("/kaggle/input/multimodal-clinical-kg-data")
+    IN_DIR = Path("/kaggle/input/datasets/abhijitkumarsingh007/multimodal-clinical-kg-data")
     WORK_DIR = Path("/kaggle/working")
     if not (WORK_DIR / "multimodal-clinical-kg").exists():
         os.system("git clone -b feat/warmstart-cascade --depth 1 https://github.com/IAteNoodles/multimodal-clinical-kg.git " + str(WORK_DIR / "multimodal-clinical-kg"))
     CODE_DIR = WORK_DIR / "multimodal-clinical-kg"
     os.chdir(str(CODE_DIR))
     sys.path.insert(0, str(CODE_DIR))
-    # Discover data: try direct subdirs, flat files, or extract archives
     print("  input files:", flush=True)
     for p in sorted(IN_DIR.iterdir()):
         tag = "dir" if p.is_dir() else f"sz={p.stat().st_size}"
@@ -86,10 +86,13 @@ from simulation.kg.dataset import (
 
 # %%
 SEEDS = [42, 123, 456]
-BATCH_SIZE = 4096
+COMPLEX_BATCH_SIZE = 200000
+CASCADE_BATCH_SIZE = 128000
 LR = 1e-3
 EMBED_DIM = 256
-EPOCHS = 51
+COMPLEX_EPOCHS = 400
+CASCADE_EPOCHS = 400
+EARLY_STOP_PATIENCE = 20
 CKPT_DIR = WORK_DIR / "ckpts"
 CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -136,8 +139,16 @@ def get_loaders(dataset, seed, batch_size):
     )
     return loader
 
-def train_complex(dataset, seed, epochs=EPOCHS, start_ep=0):
-    print(f"\n{'='*60}\nComplEx seed {seed} (resume from ep{start_ep})\n{'='*60}", flush=True)
+def make_lr_scheduler(opt, n_steps_total, warmup=200):
+    def lr_lambda(s):
+        if s < warmup:
+            return s / warmup
+        p = (s - warmup) / max(1, n_steps_total - warmup)
+        return 0.5 * (1.0 + math.cos(math.pi * p))
+    return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+
+def train_complex(dataset, seed, epochs=COMPLEX_EPOCHS, start_ep=0):
+    print(f"\n{'='*60}\nComplEx seed {seed}\n{'='*60}", flush=True)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
@@ -146,7 +157,7 @@ def train_complex(dataset, seed, epochs=EPOCHS, start_ep=0):
     model = build_complex_model(dataset).to(device)
     print(f"params={sum(p.numel() for p in model.parameters()):,}", flush=True)
 
-    loader = get_loaders(dataset, seed, BATCH_SIZE)
+    loader = get_loaders(dataset, seed, COMPLEX_BATCH_SIZE)
     neg_sampler = NegativeSampler(dataset, num_negatives=1, device=device)
     loss_fn = InfoNCELoss().to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0)
@@ -154,13 +165,7 @@ def train_complex(dataset, seed, epochs=EPOCHS, start_ep=0):
 
     n_steps_total = epochs * len(loader)
     global_step = start_ep * len(loader)
-    warmup = 200
-    def lr_lambda(s):
-        if s < warmup:
-            return s / warmup
-        p = (s - warmup) / max(1, n_steps_total - warmup)
-        return 0.5 * (1.0 + math.cos(math.pi * p))
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+    sched = make_lr_scheduler(opt, n_steps_total, warmup=200)
 
     complex_ckpt = CKPT_DIR / "complex_latest.pt"
     if start_ep > 0 and complex_ckpt.exists():
@@ -172,6 +177,12 @@ def train_complex(dataset, seed, epochs=EPOCHS, start_ep=0):
             scaler.load_state_dict(sd["scaler"])
         global_step = sd.get("global_step", start_ep * len(loader))
         print(f"  loaded checkpoint ep{start_ep}", flush=True)
+
+    evaluator = LinkPredictionEvaluator(dataset, device=device)
+    val_t, val_w = dataset.get_val_triples()
+    best_val_mrr = -1.0
+    best_ep = 0
+    patience_counter = 0
 
     for ep in range(start_ep + 1, epochs + 1):
         model.train()
@@ -200,15 +211,44 @@ def train_complex(dataset, seed, epochs=EPOCHS, start_ep=0):
                      "scaler": scaler.state_dict() if scaler else None, "ep": ep,
                      "global_step": global_step}, complex_ckpt)
 
-    # Save entity embeddings for warm-start
+        # Validation early stopping (every 5 epochs)
+        if ep % 5 == 0:
+            model.eval()
+            with torch.no_grad():
+                val_metrics = evaluator.evaluate(
+                    model, val_t.to(device), val_w.to(device),
+                    batch_size=256, max_triples=500,
+                    num_eval_negatives=500, full_rank=False,
+                )
+            val_mrr = val_metrics.get("MRR", 0)
+            print(f"  val MRR={val_mrr:.4f}", flush=True)
+            if val_mrr > best_val_mrr:
+                best_val_mrr = val_mrr
+                best_ep = ep
+                patience_counter = 0
+                torch.save(model.state_dict(), CKPT_DIR / "complex_best.pt")
+            else:
+                patience_counter += 5
+                if patience_counter >= EARLY_STOP_PATIENCE:
+                    print(f"  early stop at ep{ep} (best val MRR={best_val_mrr:.4f} @ ep{best_ep})", flush=True)
+                    break
+            model.train()
+
+    # Load best weights for final eval
+    best_path = CKPT_DIR / "complex_best.pt"
+    if best_path.exists():
+        model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True))
+
     ew_path = CKPT_DIR / "complex_entity_embeddings.pt"
     if not ew_path.exists():
         torch.save(model.entity_embeddings.weight.data.cpu(), ew_path)
         print(f"  saved entity_embeddings", flush=True)
 
-    # Evaluate ComplEx
+    del opt, sched, scaler, neg_sampler, loader
+    gc.collect()
+    torch.cuda.empty_cache()
+
     model.eval()
-    evaluator = LinkPredictionEvaluator(dataset, device=device)
     test_t, test_w = dataset.get_test_triples()
     test_metrics = evaluator.evaluate(
         model, test_t.to(device), test_w.to(device),
@@ -216,13 +256,32 @@ def train_complex(dataset, seed, epochs=EPOCHS, start_ep=0):
         num_eval_negatives=500, full_rank=False,
     )
     print(f"  ComplEx test MRR={test_metrics.get('MRR',0):.4f}", flush=True)
-    # Save metrics in checkpoint
-    sd = torch.load(complex_ckpt, map_location="cpu", weights_only=False)
-    sd["metrics"] = test_metrics
-    torch.save(sd, complex_ckpt)
     return test_metrics
 
-def train_cascade_warmstart(dataset, seed, epochs=EPOCHS):
+def upload_entity_embeddings():
+    ew_path = CKPT_DIR / "complex_entity_embeddings.pt"
+    if not ew_path.exists():
+        print("  entity_embeddings.pt not found, skipping upload", flush=True)
+        return
+    import tempfile
+    tmp = Path(tempfile.mkdtemp())
+    shutil.copy(ew_path, tmp / "entity_embeddings.pt")
+    meta = {
+        "id": "abhijitkumarsingh007/complex-entity-embeddings",
+        "title": "complex-entity-embeddings",
+        "licenses": [{"name": "MIT"}],
+    }
+    with open(tmp / "dataset-metadata.json", "w") as f:
+        json.dump(meta, f)
+    print("  uploading entity_embeddings to Kaggle dataset ...", flush=True)
+    ret = os.system(f"kaggle datasets version -p \"{tmp}\" --dir-mode zip -m \"ComplEx entity embeddings seed42\" 2>&1")
+    shutil.rmtree(tmp, ignore_errors=True)
+    if ret == 0:
+        print("  uploaded: abhijitkumarsingh007/complex-entity-embeddings", flush=True)
+    else:
+        print(f"  upload failed (ret={ret}), embeddings saved locally", flush=True)
+
+def train_cascade_warmstart(dataset, seed, epochs=CASCADE_EPOCHS):
     print(f"\n{'='*60}\nCascade warm-start seed {seed}\n{'='*60}", flush=True)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -232,20 +291,24 @@ def train_cascade_warmstart(dataset, seed, epochs=EPOCHS):
     model = build_cascade_model(dataset).to(device)
     print(f"params={sum(p.numel() for p in model.parameters()):,}", flush=True)
 
-    # Warm-start entity_embeddings from pretrained ComplEx
+    # Try loading from Kaggle dataset first, then working dir
     ew_path = CKPT_DIR / "complex_entity_embeddings.pt"
+    if KAGGLE:
+        dataset_ew = Path("/kaggle/input/complex-entity-embeddings") / "entity_embeddings.pt"
+        if dataset_ew.exists():
+            ew_path = dataset_ew
     if ew_path.exists():
         ew = torch.load(ew_path, map_location="cpu", weights_only=True)
         if ew.shape == model.entity_embeddings.weight.shape:
             model.entity_embeddings.weight.data.copy_(ew)
             model.entity_embeddings.weight.requires_grad_(False)
-            print(f"  warm-started entity_embeddings (frozen)", flush=True)
+            print(f"  warm-started entity_embeddings from {ew_path} (frozen)", flush=True)
         else:
             print(f"  WARNING: shape mismatch {ew.shape} vs {model.entity_embeddings.weight.shape}", flush=True)
     else:
-        print(f"  WARNING: {ew_path} not found, using random init", flush=True)
+        print(f"  WARNING: no entity_embeddings found, using random init", flush=True)
 
-    loader = get_loaders(dataset, seed, BATCH_SIZE)
+    loader = get_loaders(dataset, seed, CASCADE_BATCH_SIZE)
     neg_sampler = NegativeSampler(dataset, num_negatives=1, device=device)
     loss_fn = InfoNCELoss().to(device)
 
@@ -255,16 +318,16 @@ def train_cascade_warmstart(dataset, seed, epochs=EPOCHS):
     scaler = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
 
     n_steps_total = epochs * len(loader)
-    warmup = 200
-    def lr_lambda(s):
-        if s < warmup:
-            return s / warmup
-        p = (s - warmup) / max(1, n_steps_total - warmup)
-        return 0.5 * (1.0 + math.cos(math.pi * p))
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+    sched = make_lr_scheduler(opt, n_steps_total, warmup=200)
 
     entity_type_ids = dataset.get_entity_type_ids().to(device)
     entity_modality_ids = dataset.get_entity_modality_ids().to(device)
+
+    evaluator = LinkPredictionEvaluator(dataset, device=device)
+    val_t, val_w = dataset.get_val_triples()
+    best_val_mrr = -1.0
+    best_ep = 0
+    patience_counter = 0
 
     for ep in range(1, epochs + 1):
         model.train()
@@ -293,12 +356,37 @@ def train_cascade_warmstart(dataset, seed, epochs=EPOCHS):
         if ep % 10 == 0:
             torch.save(model.state_dict(), CKPT_DIR / f"cascade_ws_seed{seed}_ep{ep}.pt")
 
-    torch.save(model.state_dict(), CKPT_DIR / f"cascade_ws_seed{seed}_final.pt")
-    print(f"  saved checkpoint", flush=True)
+        # Validation early stopping
+        if ep % 5 == 0:
+            model.eval()
+            with torch.no_grad():
+                val_metrics = evaluator.evaluate(
+                    model, val_t.to(device), val_w.to(device),
+                    batch_size=256, max_triples=500,
+                    num_eval_negatives=500, full_rank=False,
+                    entity_type_ids=entity_type_ids,
+                    entity_modality_ids=entity_modality_ids,
+                )
+            val_mrr = val_metrics.get("MRR", 0)
+            print(f"  val MRR={val_mrr:.4f}", flush=True)
+            if val_mrr > best_val_mrr:
+                best_val_mrr = val_mrr
+                best_ep = ep
+                patience_counter = 0
+                torch.save(model.state_dict(), CKPT_DIR / f"cascade_ws_seed{seed}_best.pt")
+            else:
+                patience_counter += 5
+                if patience_counter >= EARLY_STOP_PATIENCE:
+                    print(f"  early stop at ep{ep} (best val MRR={best_val_mrr:.4f} @ ep{best_ep})", flush=True)
+                    break
+            model.train()
 
-    # Evaluate
+    # Load best weights for test eval
+    best_path = CKPT_DIR / f"cascade_ws_seed{seed}_best.pt"
+    if best_path.exists():
+        model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True))
+
     model.eval()
-    evaluator = LinkPredictionEvaluator(dataset, device=device)
     test_t, test_w = dataset.get_test_triples()
     test_metrics = evaluator.evaluate(
         model, test_t.to(device), test_w.to(device),
@@ -314,7 +402,6 @@ def train_cascade_warmstart(dataset, seed, epochs=EPOCHS):
 # ## Step 1: Train ComplEx (seed 42, shared embeddings)
 
 # %%
-# Find where metadata.json lives
 kg_dir = DATA_DIR / "clinical_kg_efficient"
 if not kg_dir.is_dir():
     for cand in [DATA_DIR, DATA_DIR / "kg", DATA_DIR / "data"]:
@@ -333,14 +420,13 @@ print(f"  kg_dir = {kg_dir}", flush=True)
 dataset = KGTriplesDataset.from_efficient(kg_dir, seed=42)
 print(f"entities={dataset.num_entities} relations={dataset.num_relations}", flush=True)
 
-# Resume ComplEx if checkpoint exists
 complex_ckpt = CKPT_DIR / "complex_latest.pt"
 complex_start_ep = 0
 if complex_ckpt.exists():
     sd = torch.load(complex_ckpt, map_location="cpu", weights_only=False)
     complex_start_ep = sd.get("ep", 0)
     print(f"  ComplEx checkpoint found, resuming from ep{complex_start_ep}", flush=True)
-if complex_start_ep >= 51:
+if complex_start_ep >= COMPLEX_EPOCHS:
     print("  ComplEx already complete, skipping", flush=True)
     complex_metrics = sd.get("metrics", {})
 else:
@@ -348,9 +434,37 @@ else:
     print(f"ComplEx results: {json.dumps(complex_metrics)}", flush=True)
 
 # %% [markdown]
+# ## Upload entity_embeddings to Kaggle Dataset
+
+# %%
+if KAGGLE and CKPT_DIR / "complex_entity_embeddings.pt":
+    upload_entity_embeddings()
+
+# %% [markdown]
+# ## Clean up GPU memory before cascade
+
+# %%
+del dataset, complex_metrics, complex_ckpt
+gc.collect()
+torch.cuda.empty_cache()
+
+# %% [markdown]
 # ## Step 2: Train Warm-Start Cascade (3 seeds)
 
 # %%
+kg_dir = DATA_DIR / "clinical_kg_efficient"
+if not kg_dir.is_dir():
+    for cand in [DATA_DIR, DATA_DIR / "kg", DATA_DIR / "data"]:
+        if (cand / "metadata.json").is_file():
+            kg_dir = cand
+            break
+    if not (kg_dir / "metadata.json").is_file():
+        for sub in DATA_DIR.iterdir():
+            if sub.is_dir() and (sub / "metadata.json").is_file():
+                kg_dir = sub
+                break
+dataset = KGTriplesDataset.from_efficient(kg_dir, seed=42)
+
 cascade_results = {}
 for seed in SEEDS:
     try:
@@ -361,9 +475,9 @@ for seed in SEEDS:
         import traceback
         traceback.print_exc()
 
-print(f"\nResults:\n  ComplEx: {json.dumps(complex_metrics)}\n  Cascade: {json.dumps(cascade_results)}", flush=True)
+print(f"\nCascade results: {json.dumps(cascade_results)}", flush=True)
 
 if KAGGLE:
     with open(WORK_DIR / "results.json", "w") as f:
-        json.dump({"complex": complex_metrics, "cascade": cascade_results}, f)
+        json.dump({"complex": complex_metrics if 'complex_metrics' in locals() else {}, "cascade": cascade_results}, f)
     print("Saved results.json. Copy before session ends.", flush=True)
