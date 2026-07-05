@@ -373,8 +373,8 @@ def train_cascade_warmstart(dataset, seed, epochs=CASCADE_EPOCHS):
         if ep % 10 == 0:
             torch.save(model.state_dict(), CKPT_DIR / f"cascade_ws_seed{seed}_ep{ep}.pt")
 
-        # Validation early stopping
-        if ep % 5 == 0:
+        # Validation early stopping (every epoch)
+        if ep % 1 == 0:
             model.eval()
             with torch.no_grad():
                 val_metrics = evaluator.evaluate(
@@ -392,7 +392,7 @@ def train_cascade_warmstart(dataset, seed, epochs=CASCADE_EPOCHS):
                 patience_counter = 0
                 torch.save(model.state_dict(), CKPT_DIR / f"cascade_ws_seed{seed}_best.pt")
             else:
-                patience_counter += 5
+                patience_counter += 1
                 if patience_counter >= EARLY_STOP_PATIENCE:
                     print(f"  early stop at ep{ep} (best val MRR={best_val_mrr:.4f} @ ep{best_ep})", flush=True)
                     break
