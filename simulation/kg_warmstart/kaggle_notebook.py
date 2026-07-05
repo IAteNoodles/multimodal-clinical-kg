@@ -312,10 +312,11 @@ def train_cascade_warmstart(dataset, seed, epochs=CASCADE_EPOCHS):
         print(f"  WARNING: no entity_embeddings found, using random init", flush=True)
 
     # Pretrain modality embeddings: average ComplEx embeddings per modality
+    from simulation.kg.dataset import MODALITY_TO_ID
     mod_ids = dataset.get_entity_modality_ids()
     d2 = model.modality_embeddings.weight.shape[1]
-    mod_avg = torch.zeros(dataset.num_modalities, d2)
-    mod_cnt = torch.zeros(dataset.num_modalities, 1)
+    mod_avg = torch.zeros(len(MODALITY_TO_ID), d2)
+    mod_cnt = torch.zeros(len(MODALITY_TO_ID), 1)
     for eid in range(min(dataset.num_entities, 500000)):
         mid = int(mod_ids[eid].item())
         mod_avg[mid] += model.entity_embeddings.weight.data[eid].cpu()
