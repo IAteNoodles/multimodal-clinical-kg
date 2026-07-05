@@ -274,12 +274,15 @@ def upload_entity_embeddings():
     with open(tmp / "dataset-metadata.json", "w") as f:
         json.dump(meta, f)
     print("  uploading entity_embeddings to Kaggle dataset ...", flush=True)
-    ret = os.system(f"kaggle datasets version -p \"{tmp}\" --dir-mode zip -m \"ComplEx entity embeddings seed42\" 2>&1")
+    # Try create first (new dataset), fall back to version (existing)
+    ret = os.system(f"kaggle datasets create -p \"{tmp}\" --dir-mode zip 2>&1")
+    if ret != 0:
+        ret = os.system(f"kaggle datasets version -p \"{tmp}\" --dir-mode zip -m \"ComplEx entity embeddings seed42\" 2>&1")
     shutil.rmtree(tmp, ignore_errors=True)
     if ret == 0:
         print("  uploaded: abhijitkumarsingh007/complex-entity-embeddings", flush=True)
     else:
-        print(f"  upload failed (ret={ret}), embeddings saved locally", flush=True)
+        print(f"  upload failed (ret={ret}), embeddings saved locally at {ew_path}", flush=True)
 
 def train_cascade_warmstart(dataset, seed, epochs=CASCADE_EPOCHS):
     print(f"\n{'='*60}\nCascade warm-start seed {seed}\n{'='*60}", flush=True)
