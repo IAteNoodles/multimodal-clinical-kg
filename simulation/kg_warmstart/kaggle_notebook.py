@@ -87,7 +87,7 @@ from simulation.kg.dataset import (
 # %%
 SEEDS = [42, 123, 456]
 COMPLEX_BATCH_SIZE = 200000
-CASCADE_BATCH_SIZE = 128000
+CASCADE_BATCH_SIZE = 64000
 LR = 1e-3
 EMBED_DIM = 256
 COMPLEX_EPOCHS = 400
@@ -310,6 +310,19 @@ def train_cascade_warmstart(dataset, seed, epochs=CASCADE_EPOCHS):
             print(f"  WARNING: shape mismatch {ew.shape} vs {model.entity_embeddings.weight.shape}", flush=True)
     else:
         print(f"  WARNING: no entity_embeddings found, using random init", flush=True)
+
+    # Pretrain modality embeddings: average ComplEx embeddings per modality
+    mod_ids = dataset.get_entity_modality_ids()
+    d2 = model.modality_embeddings.weight.shape[1]
+    mod_avg = torch.zeros(dataset.num_modalities, d2)
+    mod_cnt = torch.zeros(dataset.num_modalities, 1)
+    for eid in range(min(dataset.num_entities, 500000)):
+        mid = int(mod_ids[eid].item())
+        mod_avg[mid] += model.entity_embeddings.weight.data[eid].cpu()
+        mod_cnt[mid] += 1
+    mod_avg = mod_avg / mod_cnt.clamp(min=1)
+    model.modality_embeddings.weight.data.copy_(mod_avg.to(device))
+    print(f"  pretrained modality_embeddings from entity embeddings avg", flush=True)
 
     loader = get_loaders(dataset, seed, CASCADE_BATCH_SIZE)
     neg_sampler = NegativeSampler(dataset, num_negatives=1, device=device)

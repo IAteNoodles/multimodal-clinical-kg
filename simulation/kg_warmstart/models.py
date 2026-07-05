@@ -1021,7 +1021,7 @@ class MultimodalCASCADEModel(nn.Module):
                 augmented_t_re = t_re + modulation
                 augmented_t_im = t_im + modulation
                 aug_score = self._complEx_score(augmented_h_re, augmented_h_im, r_re, r_im, augmented_t_re, augmented_t_im)
-                base_score = torch.where(cross_modal_mask, base_score + self.cascade_gate * (aug_score - base_score), base_score)
+                base_score = torch.where(cross_modal_mask, aug_score, base_score)
 
         return base_score
 
