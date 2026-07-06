@@ -7,7 +7,7 @@
   "is_private": true,
   "enable_gpu": true,
   "enable_internet": true,
-  "dataset_sources": ["abhijitkumarsingh007/multimodal-clinical-kg-data", "abhijitkumarsingh007/cxr-features"],
+  "dataset_sources": ["abhijitkumarsingh007/multimodal-clinical-kg-data", "abhijitkumarsingh007/multimodal-features"],
   "competition_sources": [],
   "kernel_sources": []
 }

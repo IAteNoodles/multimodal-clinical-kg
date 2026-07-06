@@ -95,7 +95,7 @@ CASCADE_EPOCHS = 400
 EARLY_STOP_PATIENCE = 20
 CKPT_DIR = WORK_DIR / "ckpts"
 CKPT_DIR.mkdir(parents=True, exist_ok=True)
-FEATURES_DIR = Path("/kaggle/input/cxr-features") if KAGGLE else Path("simulation/data/kg/cxr_features")
+FEATURES_DIR = Path("/kaggle/input/multimodal-features") if KAGGLE else Path("simulation/data/kg/multimodal/features")
 
 # %% [markdown]
 # ## Training Functions
@@ -487,11 +487,12 @@ if not kg_dir.is_dir():
                 break
 dataset = KGTriplesDataset.from_efficient(kg_dir, seed=42)
 
-# Load CXR features if available
+# Load multimodal precomputed features (CXR, ECG, text, structured) if available
 from simulation.kg.inference import load_entity_features
 entity_features = load_entity_features(str(FEATURES_DIR), dataset) if FEATURES_DIR and FEATURES_DIR.exists() else {}
 if entity_features:
-    print(f"Loaded precomputed CXR features for {len(entity_features)} entities", flush=True)
+    n_feat = sum(len(v) for v in entity_features.values())
+    print(f"Loaded precomputed features for {len(entity_features)} entities ({n_feat} modality vectors)", flush=True)
 else:
     print("No precomputed features found, running in embedding-only mode", flush=True)
 
