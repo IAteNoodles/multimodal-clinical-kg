@@ -95,6 +95,7 @@ CASCADE_EPOCHS = 400
 EARLY_STOP_PATIENCE = 20
 CKPT_DIR = WORK_DIR / "ckpts"
 CKPT_DIR.mkdir(parents=True, exist_ok=True)
+FEATURES_DIR = Path("/kaggle/input/cxr-features") if KAGGLE else Path("simulation/data/kg/cxr_features")
 
 # %% [markdown]
 # ## Training Functions
@@ -284,7 +285,7 @@ def upload_entity_embeddings():
     else:
         print(f"  upload failed (ret={ret}), embeddings saved locally at {ew_path}", flush=True)
 
-def train_cascade_warmstart(dataset, seed, epochs=CASCADE_EPOCHS):
+def train_cascade_warmstart(dataset, seed, epochs=CASCADE_EPOCHS, entity_features=None):
     print(f"\n{'='*60}\nCascade warm-start seed {seed}\n{'='*60}", flush=True)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -324,6 +325,10 @@ def train_cascade_warmstart(dataset, seed, epochs=CASCADE_EPOCHS):
     mod_avg = mod_avg / mod_cnt.clamp(min=1)
     model.modality_embeddings.weight.data.copy_(mod_avg.to(device))
     print(f"  pretrained modality_embeddings from entity embeddings avg", flush=True)
+
+    if entity_features:
+        model.set_precomputed_features(entity_features)
+        print(f"  set precomputed features for {len(entity_features)} entities", flush=True)
 
     loader = get_loaders(dataset, seed, CASCADE_BATCH_SIZE)
     neg_sampler = NegativeSampler(dataset, num_negatives=1, device=device)
@@ -482,10 +487,18 @@ if not kg_dir.is_dir():
                 break
 dataset = KGTriplesDataset.from_efficient(kg_dir, seed=42)
 
+# Load CXR features if available
+from simulation.kg.inference import load_entity_features
+entity_features = load_entity_features(str(FEATURES_DIR), dataset) if FEATURES_DIR and FEATURES_DIR.exists() else {}
+if entity_features:
+    print(f"Loaded precomputed CXR features for {len(entity_features)} entities", flush=True)
+else:
+    print("No precomputed features found, running in embedding-only mode", flush=True)
+
 cascade_results = {}
 for seed in SEEDS:
     try:
-        metrics = train_cascade_warmstart(dataset, seed)
+        metrics = train_cascade_warmstart(dataset, seed, entity_features=entity_features)
         cascade_results[str(seed)] = metrics
     except Exception as e:
         print(f"Seed {seed} failed: {e}", flush=True)
